@@ -1,0 +1,9 @@
+# Copy to ~/.cloudflared/config.yml
+# Origin port must match PORT in backend .env (default 3004)
+
+ingress:
+  - hostname: api.kimbap.io.vn
+    service: http://localhost:3004
+  - hostname: webhook.kimbap.io.vn
+    service: http://localhost:3004
+  - service: http://localhost:3004

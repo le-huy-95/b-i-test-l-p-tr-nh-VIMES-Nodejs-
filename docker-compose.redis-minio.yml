@@ -1,0 +1,61 @@
+# Chỉ Redis + MinIO (không Postgres)
+#
+# Khởi động:
+#   docker compose -f docker-compose.redis-minio.yml up -d
+#
+# Tạo mới sạch:
+#   docker compose -f docker-compose.redis-minio.yml down -v
+#   docker compose -f docker-compose.redis-minio.yml up -d
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: inventory-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - '6380:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: inventory-minio
+    restart: unless-stopped
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: inventory-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/inventory &&
+      echo 'MinIO bucket \"inventory\" ready'
+      "
+    restart: 'no'
+
+volumes:
+  redis_data:
+  minio_data:

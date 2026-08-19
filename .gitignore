@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src/generated/
+.env
+src/config/firebase/*.json
+*.log
+.DS_Store
+coverage/
+.idea/
+.vscode/

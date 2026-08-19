@@ -1,0 +1,31 @@
+{{#> layout emailTitle="Lời mời tham gia tổ chức"}}
+  <h2 style="margin:0 0 16px;color:#111827;font-size:22px;font-weight:700;">Bạn nhận được lời mời tham gia tổ chức</h2>
+  <p style="margin:0 0 24px;color:#374151;font-size:15px;line-height:1.6;">
+    Xin chào,<br>
+    <strong>{{inviterName}}</strong> đã mời bạn tham gia tổ chức <strong>{{tenantName}}</strong> trên
+    {{siteName}} với vai trò <strong>{{roleLabel}}</strong>.
+  </p>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;border-radius:8px;margin-bottom:24px;">
+    <tr>
+      <td style="padding:16px 20px;width:50%;">
+        <p style="margin:0;color:#6b7280;font-size:13px;">Tổ chức</p>
+        <p style="margin:4px 0 0;color:#111827;font-size:16px;font-weight:600;">{{tenantName}}</p>
+      </td>
+      <td style="padding:16px 20px;width:50%;">
+        <p style="margin:0;color:#6b7280;font-size:13px;">Vai trò</p>
+        <p style="margin:4px 0 0;color:#111827;font-size:16px;font-weight:600;">{{roleLabel}}</p>
+      </td>
+    </tr>
+  </table>
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
+    <tr>
+      <td style="background-color:#2563eb;border-radius:8px;">
+        <a href="{{acceptUrl}}" style="display:inline-block;padding:12px 32px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">Chấp nhận lời mời</a>
+      </td>
+    </tr>
+  </table>
+  <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
+    Lời mời hết hạn sau <strong>{{expiryHours}} giờ</strong>. Để chấp nhận lời mời, bạn cần đăng nhập bằng
+    tài khoản có email trùng với email được mời.
+  </p>
+{{/layout}}

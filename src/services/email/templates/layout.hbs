@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{emailTitle}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background-color:#2563eb;padding:28px 32px;">
+              <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">{{siteName}}</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              {{> @partial-block }}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px;background-color:#f9fafb;border-top:1px solid #e5e7eb;">
+              <p style="margin:0;color:#6b7280;font-size:12px;line-height:1.6;">
+                © {{currentYear}} {{siteName}}. Nếu bạn không yêu cầu thao tác này, vui lòng bỏ qua email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
