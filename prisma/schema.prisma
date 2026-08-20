@@ -225,7 +225,7 @@ model Tenant {
   workflowAuthorizations DocumentStepAuthorization[]
   workflowHistories      DocumentStatusHistory[]
   uploadedFiles          UploadedFile[]
-  tenantContacts         TenantContact[]
+  contacts               Contact[]
 
   @@map("tenants")
 }
@@ -321,40 +321,27 @@ model Notification {
 }
 
 model Contact {
-  id          String      @id @default(cuid())
-  kind        ContactKind @default(external)
-  fullName    String      @map("full_name")
-  phone       String?
-  email       String?
-  companyName String?     @map("company_name")
-  taxCode     String?     @map("tax_code")
-  note        String?
-  isActive    Boolean     @default(true) @map("is_active")
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
+  id           String              @id @default(cuid())
+  tenantId     String              @map("tenant_id")
+  kind         ContactKind         @default(external)
+  relationType ContactRelationType @default(other) @map("relation_type")
+  fullName     String              @map("full_name")
+  phone        String?
+  email        String?
+  companyName  String?             @map("company_name")
+  taxCode      String?             @map("tax_code")
+  note         String?
+  isActive     Boolean             @default(true) @map("is_active")
+  createdAt    DateTime            @default(now()) @map("created_at")
+  updatedAt    DateTime            @updatedAt @map("updated_at")
 
-  tenantLinks           TenantContact[]
+  tenant                Tenant                                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   deliveryStepSnapshots DocumentWorkflowStepDeliverySnapshot[]
 
+  @@index([tenantId, relationType])
   @@index([fullName])
   @@index([phone])
   @@map("contacts")
-}
-
-model TenantContact {
-  id           String              @id @default(cuid())
-  tenantId     String              @map("tenant_id")
-  contactId    String              @map("contact_id")
-  relationType ContactRelationType @default(other) @map("relation_type")
-  isActive     Boolean             @default(true) @map("is_active")
-  createdAt    DateTime            @default(now()) @map("created_at")
-
-  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, contactId, relationType])
-  @@index([tenantId, relationType, isActive])
-  @@map("tenant_contacts")
 }
 
 model DocumentWorkflowStepDeliverySnapshot {

@@ -22,6 +22,11 @@ const envSchema = z.object({
   MINIO_SECRET_KEY: z.string().default('minioadmin'),
   MINIO_BUCKET: z.string().default('inventory'),
   MINIO_USE_SSL: z.enum(['true', 'false']).default('false'),
+  /** URL công khai để client (mobile/web) load file. Bao gồm bucket, vd: https://storage.example.com/inventory */
+  MINIO_PUBLIC_URL: z.preprocess(
+    (val) => (typeof val === 'string' && val.trim() === '' ? undefined : val),
+    z.string().url().optional(),
+  ),
 
   APP_PUBLIC_URL: z.string().default('http://localhost:3000'),
   CORS_ORIGINS: z.string().default('http://localhost:3000,http://localhost:5173'),

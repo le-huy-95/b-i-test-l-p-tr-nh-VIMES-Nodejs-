@@ -7,3 +7,15 @@ export interface ListCache {
 }
 
 export const DEFAULT_LIST_CACHE_TTL = 60;
+
+export function hasListQuery(query?: unknown): boolean {
+  return !!query && Object.keys(query as object).length > 0;
+}
+
+export function buildListCacheKey(prefix: string, tenantId: string, query?: unknown): string {
+  return `${prefix}:${tenantId}:${hasListQuery(query) ? JSON.stringify(query) : 'all'}`;
+}
+
+export function parseListCacheQuery(suffix: string): unknown {
+  return suffix === 'all' ? undefined : JSON.parse(suffix) as unknown;
+}

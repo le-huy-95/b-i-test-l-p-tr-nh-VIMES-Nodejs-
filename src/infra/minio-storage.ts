@@ -24,8 +24,23 @@ function minioEndpoint(): string {
   return `${protocol}://${env.MINIO_ENDPOINT}:${env.MINIO_PORT}`;
 }
 
-function publicBaseUrl(): string {
+function internalBaseUrl(): string {
   return `${minioEndpoint()}/${env.MINIO_BUCKET}`;
+}
+
+/** URL prefix trả về cho client (mobile/web). Dùng MINIO_PUBLIC_URL nếu có. */
+function publicBaseUrl(): string {
+  if (env.MINIO_PUBLIC_URL) {
+    return env.MINIO_PUBLIC_URL.replace(/\/$/, '');
+  }
+  return internalBaseUrl();
+}
+
+function urlPrefixes(): string[] {
+  const prefixes = new Set<string>();
+  prefixes.add(`${publicBaseUrl()}/`);
+  prefixes.add(`${internalBaseUrl()}/`);
+  return [...prefixes];
 }
 
 export class MinioObjectStorage implements ObjectStorage {
@@ -102,9 +117,12 @@ export class MinioObjectStorage implements ObjectStorage {
   }
 
   objectKeyFromUrl(url: string): string | null {
-    const prefix = `${publicBaseUrl()}/`;
-    if (!url.startsWith(prefix)) return null;
-    return url.slice(prefix.length);
+    for (const prefix of urlPrefixes()) {
+      if (url.startsWith(prefix)) {
+        return url.slice(prefix.length);
+      }
+    }
+    return null;
   }
 }
 

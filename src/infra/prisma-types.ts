@@ -10,4 +10,5 @@ export {
   WorkflowDocumentStatus,
   NotificationType,
   NotificationTargetType,
+  ContactRelationType,
 } from "../generated/prisma";

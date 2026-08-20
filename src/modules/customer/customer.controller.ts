@@ -1,31 +1,27 @@
 import { Request, Response } from 'express';
 import { customerService } from './customer.service';
+import { ok, created } from '../common/controller.util';
 
 export class CustomerController {
-  list = async (req: Request, res: Response) => {
-    const data = await customerService.list(req.tenant!.id, req.query);
-    res.json({ success: true, data });
-  };
+  list = ok(async (req: Request, _res: Response) => {
+    return customerService.list(req.tenant!.id, req.query);
+  });
 
-  create = async (req: Request, res: Response) => {
-    const data = await customerService.create(req.tenant!.id, req.body);
-    res.status(201).json({ success: true, data });
-  };
+  create = created(async (req: Request, _res: Response) => {
+    return customerService.create(req.tenant!.id, req.body);
+  });
 
-  get = async (req: Request, res: Response) => {
-    const data = await customerService.get(req.tenant!.id, req.params.id as string);
-    res.json({ success: true, data });
-  };
+  get = ok(async (req: Request, _res: Response) => {
+    return customerService.get(req.tenant!.id, req.params.id as string);
+  });
 
-  update = async (req: Request, res: Response) => {
-    const data = await customerService.update(req.tenant!.id, req.params.id as string, req.body);
-    res.json({ success: true, data });
-  };
+  update = ok(async (req: Request, _res: Response) => {
+    return customerService.update(req.tenant!.id, req.params.id as string, req.body);
+  });
 
-  softDelete = async (req: Request, res: Response) => {
-    const data = await customerService.softDelete(req.tenant!.id, req.params.id as string);
-    res.json({ success: true, data });
-  };
+  softDelete = ok(async (req: Request, _res: Response) => {
+    return customerService.softDelete(req.tenant!.id, req.params.id as string);
+  });
 }
 
 export const customerController = new CustomerController();

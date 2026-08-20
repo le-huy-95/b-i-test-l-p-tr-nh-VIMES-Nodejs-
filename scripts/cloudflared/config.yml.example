@@ -6,4 +6,6 @@ ingress:
     service: http://localhost:3004
   - hostname: webhook.kimbap.io.vn
     service: http://localhost:3004
+  - hostname: storage.kimbap.io.vn
+    service: http://localhost:9000
   - service: http://localhost:3004

@@ -2,7 +2,7 @@ import { listCache } from './redis-list-cache';
 import type { ListCache } from '../modules/common/list-cache.port';
 import { publishCacheInvalidation } from './redis-streams';
 
-const masterPrefixes = ['list:products', 'list:customers', 'list:suppliers', 'list:warehouses', 'report:warehouse-overview', 'report:organization-overview'];
+const masterPrefixes = ['list:products', 'list:customers', 'list:suppliers', 'list:warehouses', 'list:contacts', 'report:warehouse-overview', 'report:organization-overview'];
 const stockDocPrefixes = ['list:stock-receipts', 'list:stock-issues', 'list:stock-openings', 'report:warehouse-overview', 'report:organization-overview'];
 const stockReadPrefixes = [
   'list:stock-balances',
