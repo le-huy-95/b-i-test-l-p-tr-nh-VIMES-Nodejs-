@@ -1,3 +1,9 @@
+/**
+ * PORT ĐĂNG KÝ THIẾT BỊ
+ * ---------------------
+ * Interface mô tả kết quả đăng ký thiết bị và contract DeviceRegistry.
+ * Cho phép mock trong test hoặc thay implementation.
+ */
 export interface RegisteredDevice {
   id: string;
   deviceId: string;

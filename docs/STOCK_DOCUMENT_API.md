@@ -129,7 +129,7 @@ Body:
     "companyName": "Công ty vận tải ABC",
     "note": "Giao ngoài giờ hành chính"
   },
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
+  "workflowAssignedApproverIds": ["user_010", "user_011"],
   "lines": [
     {
       "productId": "prd_001",
@@ -142,6 +142,8 @@ Body:
   ]
 }
 ```
+
+> Xuất/nhập: `workflowAssignedApproverIds` = `[thủ_kho, kế_toán_trưởng]`. Người giao hàng (`deliveredBy`) chỉ để in / ký tay, không nằm trong mảng duyệt.
 
 ### 4.3 Xem chi tiết
 
@@ -212,7 +214,7 @@ Body:
     "companyName": "Công ty vận tải ABC"
   },
   "note": "Nhập hàng từ nhà cung cấp",
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
+  "workflowAssignedApproverIds": ["user_010", "user_011"],
   "lines": [
     {
       "productId": "prd_001",
@@ -227,6 +229,8 @@ Body:
   ]
 }
 ```
+
+> Xuất/nhập: `workflowAssignedApproverIds` = `[thủ_kho, kế_toán_trưởng]` (2 ID).
 
 ### 5.3 Xem chi tiết
 
@@ -282,9 +286,11 @@ Body:
   "warehouseId": "wh_001",
   "effectiveDate": "2026-08-18T08:00:00.000Z",
   "note": "Tạo phiếu đầu kỳ",
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012", "user_013"]
+  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"]
 }
 ```
+
+> Đầu kỳ: `workflowAssignedApproverIds` = `[thủ_kho, kế_toán_trưởng, admin]` (3 ID).
 
 ### 6.3 Post phiếu
 

@@ -1,9 +1,17 @@
+/**
+ * Middleware idempotency cho request thay đổi dữ liệu (POST/PUT/PATCH/DELETE).
+ *
+ * Client gửi header Idempotency-Key để retry an toàn: cùng key + cùng payload →
+ * trả lại response đã lưu; key đang xử lý → 409; key dùng với body khác → 409.
+ * Lưu trạng thái trong bảng idempotencyRecord (Prisma), TTL cấu hình qua env.
+ */
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import type { PrismaClient } from '../infra/prisma-types';
 import { prisma } from '../infra/prisma';
 import { env } from '../config/env';
 
+/** Các HTTP method cần dedupe — GET/HEAD không áp dụng */
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const IDEMPOTENCY_HEADER = 'Idempotency-Key';
 
@@ -12,6 +20,9 @@ export interface IdempotencyMiddlewareOptions {
   ttlHours?: number;
 }
 
+/**
+ * Hash nội dung request (method + URL + body JSON) để phát hiện reuse key với payload khác.
+ */
 function hashRequest(req: Request): string {
   const body = req.body === undefined ? {} : req.body;
   return crypto
@@ -20,11 +31,15 @@ function hashRequest(req: Request): string {
     .digest('hex');
 }
 
+/**
+ * Phạm vi idempotency key: gắn với user/tenant/IP để hai actor khác nhau không chia sẻ key.
+ */
 function scopeOf(req: Request): string {
   // Ưu tiên actor đã xác thực, fallback về IP khi middleware đứng ngoài auth.
   return req.user?.id ?? req.tenant?.id ?? req.ip ?? 'unknown';
 }
 
+/** Cập nhật bản ghi idempotency sau khi handler hoàn thành (completed hoặc failed) */
 async function updateRecord(
   db: PrismaClient,
   recordId: string,
@@ -46,6 +61,9 @@ async function updateRecord(
   }
 }
 
+/**
+ * Hook res.json/res.send và sự kiện finish để capture status + body trả về client.
+ */
 function captureResponse(res: Response, recordId: string, db: PrismaClient): void {
   let body: unknown = undefined;
   const originalJson = res.json.bind(res);
@@ -70,6 +88,10 @@ function captureResponse(res: Response, recordId: string, db: PrismaClient): voi
 export class IdempotencyMiddleware {
   constructor(private readonly options: IdempotencyMiddlewareOptions = {}) {}
 
+  /**
+   * Handler chính: kiểm tra/tạo idempotency record, replay hoặc cho phép chạy handler.
+   * Fail-open nếu DB lỗi — request vẫn được xử lý, chỉ mất tính dedupe tạm thời.
+   */
   resolve = async (req: Request, res: Response, next: NextFunction) => {
     if (!MUTATING_METHODS.has(req.method)) {
       return next();
@@ -171,6 +193,9 @@ export class IdempotencyMiddleware {
 export const idempotencyMiddlewareInstance = new IdempotencyMiddleware();
 export const idempotencyMiddleware = idempotencyMiddlewareInstance.resolve;
 
+/**
+ * Job dọn dẹp bản ghi idempotency đã hết hạn — gọi định kỳ từ scheduler/cron.
+ */
 export async function cleanupExpiredIdempotencyRecords(): Promise<void> {
   try {
     const result = await prisma.idempotencyRecord.deleteMany({

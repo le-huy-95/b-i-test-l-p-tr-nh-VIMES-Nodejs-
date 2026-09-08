@@ -1,3 +1,8 @@
+/**
+ * DTO LIÊN HỆ
+ * -----------
+ * Zod schema validate input tạo/sửa contact (tên, SĐT, email, ghi chú...).
+ */
 import { z } from 'zod';
 
 export const contactSchema = z.object({

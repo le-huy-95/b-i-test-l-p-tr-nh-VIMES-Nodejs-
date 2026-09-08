@@ -1,5 +1,11 @@
+/**
+ * Schema Zod và DTO cho sản phẩm (product).
+ *
+ * Validate SKU, đơn vị tính, mức tồn kho, giá vốn và danh sách đơn vị quy đổi.
+ */
 import { z } from 'zod';
 
+/* Schema sản phẩm — hỗ trợ ảnh URL hoặc fileId, nhiều đơn vị quy đổi */
 export const productSchema = z.object({
   sku: z.string().min(1),
   barcode: z.string().optional(),

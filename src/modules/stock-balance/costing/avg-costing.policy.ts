@@ -1,3 +1,8 @@
+/**
+ * GIÁ VỐN BÌNH QUÂN (MOVING AVERAGE)
+ * ----------------------------------
+ * Cập nhật average_cost khi nhập; xuất dùng giá vốn hiện tại.
+ */
 import { d, toDecimalString } from '../../../utils/decimal';
 import type { StockBalanceReader } from '../stock-balance.port';
 import type { CostingChangeInput, CostingPolicy } from './costing-policy';

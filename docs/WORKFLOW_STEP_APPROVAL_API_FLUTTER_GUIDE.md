@@ -131,17 +131,16 @@ Idempotency-Key: <uuid-v4>
 
 Khi tạo phiếu, backend **tự khởi tạo workflow** với template cố định.
 
-### 3.1 Phiếu xuất / phiếu nhập (4 bước)
+### 3.1 Phiếu xuất / phiếu nhập (3 bước số)
 
 | sequence | stepCode | stepName | Gán người duyệt |
 |----------|----------|----------|-----------------|
 | 1 | `creator` | Người lập phiếu | Tự động = người tạo phiếu |
-| 2 | `delivery` | Người giao hàng | `workflowAssignedApproverIds[0]` |
-| 3 | `warehouse` | Thủ kho | `workflowAssignedApproverIds[1]` |
-| 4 | `chief_accountant` | Kế toán trưởng | `workflowAssignedApproverIds[2]` |
+| 2 | `warehouse` | Thủ kho | `workflowAssignedApproverIds[0]` |
+| 3 | `chief_accountant` | Kế toán trưởng | `workflowAssignedApproverIds[1]` |
 
-- Bước `delivery` là **optional** — có thể `skip`.
-- Cần **đúng 3** user ID trong `workflowAssignedApproverIds`.
+- Cần **đúng 2** user ID trong `workflowAssignedApproverIds`.
+- **Người giao hàng không còn trong workflow số.** Lưu tên/contact trên phiếu (`deliveredBy` / `deliveredByName`) để **ký tay sau khi in**.
 
 ### 3.2 Phiếu đầu kỳ (4 bước)
 
@@ -160,17 +159,16 @@ Khi tạo phiếu, backend **tự khởi tạo workflow** với template cố đ
 workflowAssignedApproverIds[i]  →  bước có sequence = i + 2
 ```
 
-Ví dụ phiếu nhập:
+Ví dụ phiếu nhập / xuất:
 
 ```json
-"workflowAssignedApproverIds": ["user_delivery", "user_warehouse", "user_accountant"]
+"workflowAssignedApproverIds": ["user_warehouse", "user_accountant"]
 ```
 
 | Index | User | Bước |
 |-------|------|------|
-| 0 | user_delivery | delivery |
-| 1 | user_warehouse | warehouse |
-| 2 | user_accountant | chief_accountant |
+| 0 | user_warehouse | warehouse |
+| 1 | user_accountant | chief_accountant |
 
 ---
 
@@ -184,7 +182,7 @@ Ví dụ phiếu nhập:
 GET /api/v1/tenants/current/members
 ```
 
-**Mục đích:** Hiển thị dropdown/picker chọn 3 người duyệt theo thứ tự bước.
+**Mục đích:** Hiển thị dropdown/picker chọn người duyệt theo thứ tự bước (xuất/nhập: **2** người; đầu kỳ: **3** người).
 
 **CHECK trước khi gọi:**
 - [ ] Đã có `access_token`
@@ -215,8 +213,7 @@ Idempotency-Key: <uuid>
   "note": "Nhập hàng từ NCC",
   "workflowAssignedApproverIds": [
     "user_010",
-    "user_011",
-    "user_012"
+    "user_011"
   ],
   "lines": [
     {
@@ -231,6 +228,8 @@ Idempotency-Key: <uuid>
   ]
 }
 ```
+
+> `deliveredByName` / contact người giao hàng chỉ để in phiếu (ký tay sau). Không gán vào `workflowAssignedApproverIds`.
 
 #### Phiếu xuất kho
 
@@ -248,8 +247,7 @@ Idempotency-Key: <uuid>
   "note": "Xuất bán",
   "workflowAssignedApproverIds": [
     "user_010",
-    "user_011",
-    "user_012"
+    "user_011"
   ],
   "lines": [
     {
@@ -466,9 +464,8 @@ Idempotency-Key: <uuid>
     "currentStepStatus": "pending",
     "steps": [
       { "stepCode": "creator", "status": "approved", "..." : "..." },
-      { "stepCode": "delivery", "status": "approved", "..." : "..." },
-      { "stepCode": "warehouse", "status": "approved", "actualSignerId": "user_011", "..." : "..." },
-      { "stepCode": "chief_accountant", "status": "pending", "assignedApproverId": "user_012", "..." : "..." }
+      { "stepCode": "warehouse", "status": "approved", "actualSignerId": "user_010", "..." : "..." },
+      { "stepCode": "chief_accountant", "status": "pending", "assignedApproverId": "user_011", "..." : "..." }
     ]
   }
 }
@@ -522,20 +519,22 @@ Idempotency-Key: <uuid>
 
 ---
 
-### Bước 8 — (Tuỳ chọn) Bỏ qua bước delivery (Skip)
+### Bước 8 — (Tuỳ chọn) Skip bước optional
 
-**Khi nào gọi:** Bước `delivery` (optional) không cần ký.
+**Khi nào gọi:** Bước hiện tại có `optional: true` và không cần ký trên hệ thống.
+
+> Phiếu xuất/nhập **mới** không còn bước `delivery` trong workflow. `skip` chủ yếu còn hữu ích với phiếu cũ còn bước optional.
 
 ```json
 {
   "action": "skip",
-  "stepId": "step_delivery_001",
-  "note": "Không có người giao hàng ngoài"
+  "stepId": "step_optional_001",
+  "note": "Bỏ qua bước không bắt buộc"
 }
 ```
 
 **CHECK:**
-- [ ] Chỉ skip bước `delivery` (optional)
+- [ ] Chỉ skip bước `optional`
 - [ ] Step `status === "pending"`
 
 ---
@@ -880,8 +879,8 @@ GET /api/v1/document-workflows/:documentType/:documentId/timeline
 | 4 | `actualQty > 0` mỗi dòng | ✅ | `VALIDATION_ERROR` |
 | 5 | `expectedQty >= 0` | ✅ | `VALIDATION_ERROR` |
 | 6 | `unitPrice >= 0` | ✅ | `VALIDATION_ERROR` |
-| 7 | `workflowAssignedApproverIds.length === 3` | ✅ | `VALIDATION_ERROR`: *assignedApproverIds must include an approver for each workflow step after creator* |
-| 8 | 3 user ID phải khác nhau (khuyến nghị) | ✅ UI | — |
+| 7 | `workflowAssignedApproverIds.length === 2` | ✅ | `VALIDATION_ERROR`: *assignedApproverIds must include an approver for each workflow step after creator* |
+| 8 | 2 user ID phải khác nhau (khuyến nghị) | ✅ UI | — |
 | 9 | User ID phải tồn tại trong tenant | ✅ | — |
 
 #### Phiếu xuất (`stock_issue`)
@@ -892,7 +891,7 @@ GET /api/v1/document-workflows/:documentType/:documentId/timeline
 | 2 | `issueType === "sale"` → `customerId` bắt buộc | ✅ |
 | 3 | `lines.length >= 1` | ✅ |
 | 4 | `requestedQty > 0`, `actualQty > 0` | ✅ |
-| 5 | `workflowAssignedApproverIds.length === 3` | ✅ |
+| 5 | `workflowAssignedApproverIds.length === 2` | ✅ |
 
 #### Phiếu đầu kỳ (`stock_opening`)
 
@@ -1190,15 +1189,16 @@ Future<void> approveCurrentStep({
 ### B. Màn tạo phiếu
 
 - [ ] Load members (`GET /tenants/current/members`)
-- [ ] 3 picker người duyệt theo thứ tự bước
-- [ ] Validate `workflowAssignedApproverIds.length === 3`
+- [ ] Xuất/nhập: **2** picker (thủ kho, kế toán); đầu kỳ: **3** picker
+- [ ] Validate `workflowAssignedApproverIds.length === 2` (xuất/nhập) hoặc `=== 3` (đầu kỳ)
+- [ ] Contact / tên người giao hàng chỉ để in (ký tay), không đưa vào mảng duyệt
 - [ ] Validate form nghiệp vụ trước submit
 - [ ] Sau create: lưu `documentId`, navigate sang detail
 
 ### C. Màn chi tiết phiếu
 
 - [ ] Parallel fetch: phiếu nghiệp vụ + workflow + available-actions
-- [ ] Stepper 4 bước với màu theo step status
+- [ ] Stepper theo số bước template (xuất/nhập: **3** bước số)
 - [ ] Highlight bước `pending`
 - [ ] Hiện tên người được gán (`assignedApproverId` → resolve tên từ members)
 - [ ] Tab timeline (`GET .../timeline`)
@@ -1228,9 +1228,8 @@ Future<void> approveCurrentStep({
 
 ### G. Test scenarios
 
-- [ ] Tạo phiếu → submit → approve lần lượt 3 bước → complete
+- [ ] Tạo phiếu → submit → approve creator → warehouse → chief_accountant → complete
 - [ ] Reject ở bước giữa → phiếu rejected, các bước sau cancelled
-- [ ] Skip bước delivery → chuyển sang warehouse
 - [ ] User không được gán → không thấy nút approve
 - [ ] Assign lại người duyệt → user mới thấy nút
 - [ ] Double tap approve → idempotency / STEP_NOT_PENDING

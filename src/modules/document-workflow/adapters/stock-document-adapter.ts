@@ -1,11 +1,24 @@
-import type { Prisma } from '../../../infra/prisma-types';
-import type { TenantRole } from '../../../infra/prisma-types';
-import type { DocumentInfo, DocumentAdapterPort } from '../document-adapter.port';
-import type { DocumentType, WorkflowActor, WorkflowDocumentStatus } from '../document-workflow.port';
-import { stockIssueService } from '../../stock-issue/stock-issue.service';
-import { stockReceiptService } from '../../stock-receipt/stock-receipt.service';
-import { stockOpeningService } from '../../stock-opening/stock-opening.service';
-import type { StockDocActor } from '../../../shared/notifications/stock-doc-notify';
+/**
+ * ADAPTER CHỨNG TỪ KHO CHO WORKFLOW
+ * ---------------------------------
+ * Cầu nối workflow engine ↔ stock receipt/issue/opening services.
+ * Khi bước cuối approved → gọi complete; rejected → rollback trạng thái.
+ */
+import type { Prisma } from "../../../infra/prisma-types";
+import type { TenantRole } from "../../../infra/prisma-types";
+import type {
+  DocumentInfo,
+  DocumentAdapterPort,
+} from "../document-adapter.port";
+import type {
+  DocumentType,
+  WorkflowActor,
+  WorkflowDocumentStatus,
+} from "../document-workflow.port";
+import { stockIssueService } from "../../stock-issue/stock-issue.service";
+import { stockReceiptService } from "../../stock-receipt/stock-receipt.service";
+import { stockOpeningService } from "../../stock-opening/stock-opening.service";
+import type { StockDocActor } from "../../../shared/notifications/stock-doc-notify";
 
 function toStockDocActor(actor: WorkflowActor): StockDocActor {
   return { userId: actor.userId, name: actor.name, email: actor.email };
@@ -18,8 +31,11 @@ async function resolveDefaultSigner(
   stepCode: string,
   actor: WorkflowActor,
   assignedApproverId?: string | null,
-): Promise<{ requiredSignerId: string | null; assignedApproverId: string | null }> {
-  if (stepCode === 'creator') {
+): Promise<{
+  requiredSignerId: string | null;
+  assignedApproverId: string | null;
+}> {
+  if (stepCode === "creator") {
     return { requiredSignerId: actor.userId, assignedApproverId: actor.userId };
   }
 
@@ -28,13 +44,22 @@ async function resolveDefaultSigner(
 }
 
 export class StockIssueDocumentAdapter implements DocumentAdapterPort {
-  async getDocumentInfo(tenantId: string, documentId: string, trx: Prisma.TransactionClient): Promise<DocumentInfo | null> {
+  async getDocumentInfo(
+    tenantId: string,
+    documentId: string,
+    trx: Prisma.TransactionClient,
+  ): Promise<DocumentInfo | null> {
     const doc = await trx.stockIssue.findFirst({
       where: { id: documentId, tenantId },
       select: { id: true, code: true, createdById: true, status: true },
     });
     if (!doc) return null;
-    return { id: doc.id, code: doc.code, createdById: doc.createdById, currentStatus: doc.status };
+    return {
+      id: doc.id,
+      code: doc.code,
+      createdById: doc.createdById,
+      currentStatus: doc.status,
+    };
   }
 
   async onStatusChanged(
@@ -47,16 +72,21 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
   ): Promise<void> {
     const stockActor = toStockDocActor(actor);
     switch (newStatus) {
-      case 'in_review':
+      case "in_review":
         await stockIssueService.submit(tenantId, documentId, stockActor);
         break;
-      case 'rejected':
-        await stockIssueService.reject(tenantId, documentId, 'Rejected by workflow', stockActor);
+      case "rejected":
+        await stockIssueService.reject(
+          tenantId,
+          documentId,
+          "Rejected by workflow",
+          stockActor,
+        );
         break;
-      case 'cancelled':
+      case "cancelled":
         await stockIssueService.cancel(tenantId, documentId, stockActor);
         break;
-      case 'approved':
+      case "approved":
         await stockIssueService.approve(tenantId, documentId, stockActor);
         break;
       default:
@@ -70,7 +100,11 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
     actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
   ): Promise<void> {
-    await stockIssueService.completeNow(tenantId, documentId, toStockDocActor(actor));
+    await stockIssueService.completeNow(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
+    );
   }
 
   async resolveInitialSigner(
@@ -81,19 +115,31 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
     actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
     assignedApproverId?: string | null,
-  ): Promise<{ requiredSignerId: string | null; assignedApproverId: string | null }> {
+  ): Promise<{
+    requiredSignerId: string | null;
+    assignedApproverId: string | null;
+  }> {
     return resolveDefaultSigner(stepCode, actor, assignedApproverId);
   }
 }
 
 export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
-  async getDocumentInfo(tenantId: string, documentId: string, trx: Prisma.TransactionClient): Promise<DocumentInfo | null> {
+  async getDocumentInfo(
+    tenantId: string,
+    documentId: string,
+    trx: Prisma.TransactionClient,
+  ): Promise<DocumentInfo | null> {
     const doc = await trx.stockReceipt.findFirst({
       where: { id: documentId, tenantId },
       select: { id: true, code: true, createdById: true, status: true },
     });
     if (!doc) return null;
-    return { id: doc.id, code: doc.code, createdById: doc.createdById, currentStatus: doc.status };
+    return {
+      id: doc.id,
+      code: doc.code,
+      createdById: doc.createdById,
+      currentStatus: doc.status,
+    };
   }
 
   async onStatusChanged(
@@ -106,16 +152,21 @@ export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
   ): Promise<void> {
     const stockActor = toStockDocActor(actor);
     switch (newStatus) {
-      case 'in_review':
+      case "in_review":
         await stockReceiptService.submit(tenantId, documentId, stockActor);
         break;
-      case 'rejected':
-        await stockReceiptService.reject(tenantId, documentId, 'Rejected by workflow', stockActor);
+      case "rejected":
+        await stockReceiptService.reject(
+          tenantId,
+          documentId,
+          "Rejected by workflow",
+          stockActor,
+        );
         break;
-      case 'cancelled':
+      case "cancelled":
         await stockReceiptService.cancel(tenantId, documentId, stockActor);
         break;
-      case 'approved':
+      case "approved":
         await stockReceiptService.approve(tenantId, documentId, stockActor);
         break;
       default:
@@ -129,7 +180,11 @@ export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
     actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
   ): Promise<void> {
-    await stockReceiptService.completeNow(tenantId, documentId, toStockDocActor(actor));
+    await stockReceiptService.completeNow(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
+    );
   }
 
   async resolveInitialSigner(
@@ -140,19 +195,31 @@ export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
     actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
     assignedApproverId?: string | null,
-  ): Promise<{ requiredSignerId: string | null; assignedApproverId: string | null }> {
+  ): Promise<{
+    requiredSignerId: string | null;
+    assignedApproverId: string | null;
+  }> {
     return resolveDefaultSigner(stepCode, actor, assignedApproverId);
   }
 }
 
 export class StockOpeningDocumentAdapter implements DocumentAdapterPort {
-  async getDocumentInfo(tenantId: string, documentId: string, trx: Prisma.TransactionClient): Promise<DocumentInfo | null> {
+  async getDocumentInfo(
+    tenantId: string,
+    documentId: string,
+    trx: Prisma.TransactionClient,
+  ): Promise<DocumentInfo | null> {
     const doc = await trx.stockOpeningBalance.findFirst({
       where: { id: documentId, tenantId },
       select: { id: true, code: true, createdById: true, status: true },
     });
     if (!doc) return null;
-    return { id: doc.id, code: doc.code, createdById: doc.createdById, currentStatus: doc.status };
+    return {
+      id: doc.id,
+      code: doc.code,
+      createdById: doc.createdById,
+      currentStatus: doc.status,
+    };
   }
 
   async onStatusChanged(
@@ -162,8 +229,7 @@ export class StockOpeningDocumentAdapter implements DocumentAdapterPort {
     _newStatus: WorkflowDocumentStatus,
     _actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
-  ): Promise<void> {
-  }
+  ): Promise<void> {}
 
   async onComplete(
     tenantId: string,
@@ -182,31 +248,51 @@ export class StockOpeningDocumentAdapter implements DocumentAdapterPort {
     actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
     assignedApproverId?: string | null,
-  ): Promise<{ requiredSignerId: string | null; assignedApproverId: string | null }> {
+  ): Promise<{
+    requiredSignerId: string | null;
+    assignedApproverId: string | null;
+  }> {
     return resolveDefaultSigner(stepCode, actor, assignedApproverId);
   }
 }
 
 export class DocumentAdapterFactoryImpl {
-  private static adapters: Partial<Record<DocumentType, DocumentAdapterPort>> = {};
+  private static adapters: Partial<Record<DocumentType, DocumentAdapterPort>> =
+    {};
 
-  static register(documentType: DocumentType, adapter: DocumentAdapterPort): void {
+  static register(
+    documentType: DocumentType,
+    adapter: DocumentAdapterPort,
+  ): void {
     DocumentAdapterFactoryImpl.adapters[documentType] = adapter;
   }
 
   static getAdapter(documentType: DocumentType): DocumentAdapterPort {
     const adapter = DocumentAdapterFactoryImpl.adapters[documentType];
     if (!adapter) {
-      throw new Error(`No document adapter registered for type: ${documentType}`);
+      throw new Error(
+        `No document adapter registered for type: ${documentType}`,
+      );
     }
     return adapter;
   }
 }
 
-DocumentAdapterFactoryImpl.register('stock_issue', new StockIssueDocumentAdapter());
-DocumentAdapterFactoryImpl.register('stock_receipt', new StockReceiptDocumentAdapter());
-DocumentAdapterFactoryImpl.register('stock_opening', new StockOpeningDocumentAdapter());
+DocumentAdapterFactoryImpl.register(
+  "stock_issue",
+  new StockIssueDocumentAdapter(),
+);
+DocumentAdapterFactoryImpl.register(
+  "stock_receipt",
+  new StockReceiptDocumentAdapter(),
+);
+DocumentAdapterFactoryImpl.register(
+  "stock_opening",
+  new StockOpeningDocumentAdapter(),
+);
 
-export function getDocumentAdapter(documentType: DocumentType): DocumentAdapterPort {
+export function getDocumentAdapter(
+  documentType: DocumentType,
+): DocumentAdapterPort {
   return DocumentAdapterFactoryImpl.getAdapter(documentType);
 }

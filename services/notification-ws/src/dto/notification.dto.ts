@@ -1,12 +1,21 @@
+/**
+ * Schema Zod + type cho REST query/body, Kafka event, và message WebSocket.
+ * Dùng chung giữa HTTP controller, Kafka consumer, và WS server.
+ */
 import { z } from 'zod';
 import { NOTIFICATION_EVENT_TYPES, type NotificationEventType } from '../../../../src/shared/notifications/event-types';
 import { recipientPolicySchema } from '../../../../src/shared/notifications/recipient-policy';
 
+/**
+ * Query string chỉ là 'true'/'false' (không phải JSON boolean).
+ * Transform thành boolean thực; thiếu field → undefined (không lọc).
+ */
 const boolFromQuery = z
   .enum(['true', 'false'])
   .optional()
   .transform((v) => v === 'true');
 
+/** Query GET /notifications: phân trang cursor + filter unread/tenant. */
 export const listNotificationsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().optional(),
@@ -16,6 +25,7 @@ export const listNotificationsQuerySchema = z.object({
 
 export type ListNotificationsQuery = z.infer<typeof listNotificationsQuerySchema>;
 
+/** Body POST /mark-read: ids cụ thể, hoặc markAll, tùy chọn theo tenant. */
 export const markReadSchema = z.object({
   notificationIds: z.array(z.string()).optional(),
   markAll: z.boolean().optional().default(false),
@@ -24,6 +34,11 @@ export const markReadSchema = z.object({
 
 export type MarkReadInput = z.infer<typeof markReadSchema>;
 
+/**
+ * Payload Kafka topic notifications.
+ * eventId dùng làm khóa idempotent khi ghi Notification.
+ * recipientPolicy quyết định ai nhận (resolver sẽ query DB).
+ */
 export const tenantNotificationEventSchema = z.object({
   eventId: z.string(),
   eventType: z.enum(
@@ -51,6 +66,7 @@ export const tenantNotificationEventSchema = z.object({
   data: z.record(z.string(), z.unknown()).optional(),
 });
 
+/** Shape trả về REST và đẩy qua WS (Date đã thành ISO string). */
 export interface NotificationItem {
   id: string;
   type: string;
@@ -71,8 +87,14 @@ export interface NotificationItem {
   data: Record<string, unknown> | null;
 }
 
+/** Client → server: keepalive. Server trả PONG. */
 export type WsInboundMessage = { type: 'PING' };
 
+/**
+ * Server → client:
+ * - NOTIFICATION_NEW: có thông báo mới + unreadCount để update badge
+ * - PONG: trả lời PING
+ */
 export type WsOutboundMessage =
   | { type: 'NOTIFICATION_NEW'; data: NotificationItem; unreadCount: number }
   | { type: 'PONG' };

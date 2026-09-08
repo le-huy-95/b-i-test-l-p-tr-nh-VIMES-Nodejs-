@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER PHIẾU NHẬP
+ * ---------------------
+ * HTTP handler stock receipt lifecycle.
+ */
 import { Request, Response } from 'express';
 import { stockReceiptService } from './stock-receipt.service';
 import { rejectDocumentSchema } from '../../dto/stock-receipt.dto';

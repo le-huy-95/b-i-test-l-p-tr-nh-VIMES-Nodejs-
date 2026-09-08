@@ -1,3 +1,8 @@
+/**
+ * PORT SỐ DƯ TỒN KHO
+ * ------------------
+ * Interface trừu tượng hóa thao tác đọc/ghi stock balance.
+ */
 import type { Prisma } from '../../infra/prisma-types';
 import type { Decimal } from '../../utils/decimal';
 

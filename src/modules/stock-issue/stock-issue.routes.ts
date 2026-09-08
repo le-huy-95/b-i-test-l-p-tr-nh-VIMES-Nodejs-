@@ -1,3 +1,8 @@
+/**
+ * ROUTES PHIẾU XUẤT (/api/v1/stock-issues)
+ * ----------------------------------------
+ * CRUD phiếu xuất kho, submit/hủy, idempotency.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

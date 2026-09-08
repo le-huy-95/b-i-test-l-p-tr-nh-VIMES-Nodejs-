@@ -1,3 +1,8 @@
+/**
+ * ROUTES SẢN PHẨM (/api/v1/products)
+ * ----------------------------------
+ * CRUD sản phẩm, đơn vị tính, mức tồn tối thiểu, giá vốn trung bình.
+ */
 import { Router } from "express";
 import { authMiddleware } from "../../middlewares/auth";
 import { requireRoles, tenantMiddleware } from "../../middlewares/tenant";

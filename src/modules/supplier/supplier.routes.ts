@@ -1,3 +1,8 @@
+/**
+ * ROUTES NHÀ CUNG CẤP (/api/v1/suppliers)
+ * ---------------------------------------
+ * CRUD nhà cung cấp — dùng cho phiếu nhập kho.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

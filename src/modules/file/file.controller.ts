@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER FILE
+ * ---------------
+ * HTTP handler upload và metadata file.
+ */
 import { Request, Response } from 'express';
 import { fileService } from './file.service';
 import { parseUploadMediaInput, parseUploadMediaKind } from '../../dto/upload-media.dto';

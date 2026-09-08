@@ -1,3 +1,9 @@
+/**
+ * DỊCH VỤ OTP
+ * -----------
+ * Tạo/xác minh/gửi lại mã OTP qua email; hỗ trợ quên mật khẩu và đặt lại mật khẩu.
+ * Mã OTP hash trước khi lưu DB, có TTL theo env.OTP_EXPIRES_MINUTES.
+ */
 import type { PrismaClient } from '../../infra/prisma-types';
 import { prisma } from '../../infra/prisma';
 import { env } from '../../config/env';

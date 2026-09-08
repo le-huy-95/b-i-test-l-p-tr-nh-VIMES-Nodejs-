@@ -1,3 +1,10 @@
+/**
+ * CẢNH BÁO TỒN KHO
+ * ----------------
+ * - computeLowStockItems: sản phẩm có available < minStockLevel
+ * - computeExpiryAlerts: lô hàng sắp hết hạn trong N ngày tới
+ * Dùng chung cho report service và warehouse overview.
+ */
 import type { PrismaClient } from '../../infra/prisma-types';
 import { d } from '../../utils/decimal';
 

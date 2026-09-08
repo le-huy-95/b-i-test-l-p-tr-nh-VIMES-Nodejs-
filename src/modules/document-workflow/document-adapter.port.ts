@@ -1,7 +1,15 @@
+/**
+ * Cổng (port) adapter kết nối engine workflow với từng loại chứng từ cụ thể.
+ *
+ * Mỗi loại chứng từ (phiếu xuất, phiếu nhập, tồn kho đầu kỳ...) triển khai DocumentAdapterPort
+ * để đọc thông tin chứng từ, đồng bộ trạng thái khi workflow thay đổi, hoàn tất nghiệp vụ
+ * và xác định người ký ban đầu cho từng bước duyệt.
+ */
 import type { Prisma } from '../../infra/prisma-types';
 import type { TenantRole } from '../../infra/prisma-types';
 import type { DocumentType, WorkflowActor, WorkflowDocumentStatus } from './document-workflow.port';
 
+// --- Thông tin tóm tắt chứng từ cần cho workflow ---
 export interface DocumentInfo {
   id: string;
   code: string;
@@ -9,6 +17,7 @@ export interface DocumentInfo {
   currentStatus: string;
 }
 
+// --- Hợp đồng adapter cho từng loại chứng từ ---
 export interface DocumentAdapterPort {
   getDocumentInfo(
     tenantId: string,
@@ -43,6 +52,7 @@ export interface DocumentAdapterPort {
   ): Promise<{ requiredSignerId: string | null; assignedApproverId: string | null }>;
 }
 
+// --- Factory tra cứu adapter theo loại chứng từ ---
 export interface DocumentAdapterFactory {
   getAdapter(documentType: DocumentType): DocumentAdapterPort;
 }

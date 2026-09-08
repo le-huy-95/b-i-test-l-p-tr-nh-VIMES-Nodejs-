@@ -1,3 +1,8 @@
+/**
+ * HÀM HỖ TRỢ TỔNG QUAN TỔ CHỨC
+ * ----------------------------
+ * Lọc theo phạm vi kho, phạm vi document, khoảng ngày, chuỗi biểu đồ ngày.
+ */
 import type { TenantRole } from '../../infra/prisma-types';
 
 export const FULL_ACCESS_ROLES: TenantRole[] = ['admin', 'accountant'];

@@ -1,5 +1,11 @@
+/**
+ * Schema Zod và DTO cho phiếu tồn kho đầu kỳ (stock opening).
+ *
+ * Validate kho, ngày hiệu lực, dòng hàng với số lượng và đơn giá vốn ban đầu.
+ */
 import { z } from 'zod';
 
+/* Schema tạo phiếu tồn đầu kỳ — mỗi dòng gắn sản phẩm, số lượng và giá vốn */
 export const createStockOpeningSchema = z.object({
   warehouseId: z.string(),
   effectiveDate: z.string(),

@@ -1,3 +1,8 @@
+/**
+ * PORT POSTING TỒN KHO
+ * --------------------
+ * Interface posting — cho phép mock hoặc queue async.
+ */
 import type { Prisma } from '../../infra/prisma-types';
 import type { QtyChange } from './stock-balance.port';
 

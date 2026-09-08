@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER KHÁCH HÀNG
+ * ---------------------
+ * HTTP handler customer CRUD.
+ */
 import { Request, Response } from 'express';
 import { customerService } from './customer.service';
 import { ok, created } from '../common/controller.util';

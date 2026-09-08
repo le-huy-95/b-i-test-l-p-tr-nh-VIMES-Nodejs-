@@ -1,3 +1,10 @@
+/**
+ * Socket.IO server — alternative realtime cho client không dùng WS thuần
+ * (web browser, fallback polling khi WS bị proxy chặn).
+ *
+ * Auth: JWT trong handshake.query.token hoặc handshake.auth.token.
+ * Peer được đăng vào cùng ConnectionManager với WS thuần → push 1 lần là tới cả hai.
+ */
 import type { Server as HttpServer } from 'http';
 import { Server as SocketIoServer, type Socket } from 'socket.io';
 import { env } from '../../../../src/config/env';
@@ -5,12 +12,18 @@ import type { WsInboundMessage, WsOutboundMessage } from '../dto/notification.dt
 import { verifyWsToken } from './auth';
 import { connectionManager } from './connection-manager';
 
+/** Path Engine.IO; ws/server.ts phải skip upgrade này. */
 export const SOCKET_IO_PATH = '/socket.io';
 
+/** Tách CORS_ORIGINS (csv) thành mảng origin cho Socket.IO. */
 function corsOrigins(): string[] {
   return env.CORS_ORIGINS.split(',').map((o) => o.trim());
 }
 
+/**
+ * Lấy JWT từ handshake.
+ * Ưu tiên query.token (dễ gắn URL), sau đó auth.token (Socket.IO v4 chuẩn).
+ */
 function resolveToken(socket: Socket): string | null {
   const query = socket.handshake.query.token;
   if (typeof query === 'string' && query.length > 0) return query;
@@ -21,9 +34,13 @@ function resolveToken(socket: Socket): string | null {
   return null;
 }
 
+/**
+ * Gắn Socket.IO lên cùng HTTP server (path /socket.io, CORS giống REST).
+ */
 export function attachSocketIoServer(server: HttpServer): SocketIoServer {
   const io = new SocketIoServer(server, {
     path: SOCKET_IO_PATH,
+    // websocket trước, polling nếu upgrade thất bại
     transports: ['websocket', 'polling'],
     cors: {
       origin: corsOrigins(),
@@ -31,6 +48,7 @@ export function attachSocketIoServer(server: HttpServer): SocketIoServer {
     },
   });
 
+  // Middleware handshake: fail → client nhận 'unauthorized', không vào 'connection'
   io.use(async (socket, next) => {
     try {
       const token = resolveToken(socket);
@@ -39,6 +57,7 @@ export function attachSocketIoServer(server: HttpServer): SocketIoServer {
         next(new Error('unauthorized'));
         return;
       }
+      // Gắn userId vào socket.data cho handler connection
       socket.data.userId = auth.userId;
       next();
     } catch (err) {
@@ -61,6 +80,10 @@ export function attachSocketIoServer(server: HttpServer): SocketIoServer {
       socket.send(JSON.stringify(pong));
     };
 
+    /**
+     * Client có thể gửi PING dạng event 'message' (JSON string/object)
+     * hoặc event tên 'PING' — cả hai đều trả PONG.
+     */
     const handleRaw = (raw: unknown): void => {
       try {
         const parsed =

@@ -1,29 +1,37 @@
-import type { Prisma, PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { d } from '../../utils/decimal';
-import { AppError } from '../../utils/app-error';
+/**
+ * DỊCH VỤ SỐ DƯ TỒN KHO
+ * ---------------------
+ * Đọc/cập nhật stock_balances theo warehouse+product+batch.
+ * Điều phối reservation và đảm bảo không âm tồn.
+ */
+import type { Prisma, PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { d } from "../../utils/decimal";
+import { AppError } from "../../utils/app-error";
 import type {
   BalanceKey,
   QtyChange,
   StockBalanceReader,
   StockBalanceWriter,
-} from './stock-balance.port';
+} from "./stock-balance.port";
 
-export type { BalanceKey, QtyChange } from './stock-balance.port';
+export type { BalanceKey, QtyChange } from "./stock-balance.port";
 
 function nullKey(v?: string | null) {
   return v ?? null;
 }
 
 function balanceKey(c: QtyChange): string {
-  return `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${c.batchId ?? ''}\u0000${c.locationId ?? ''}`;
+  return `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${c.batchId ?? ""}\u0000${c.locationId ?? ""}`;
 }
 
 function compareQtyChangeKey(a: QtyChange, b: QtyChange) {
   return balanceKey(a).localeCompare(balanceKey(b));
 }
 
-export class StockBalanceService implements StockBalanceReader, StockBalanceWriter {
+export class StockBalanceService
+  implements StockBalanceReader, StockBalanceWriter
+{
   constructor(private readonly db: PrismaClient = prisma) {}
 
   async getAvailable(
@@ -38,10 +46,10 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
         tenantId,
         productId,
         warehouseId,
-        status: 'active',
+        status: "active",
         expiresAt: { lt: new Date() },
       },
-      data: { status: 'expired' },
+      data: { status: "expired" },
     });
 
     const balances = await trx.stockBalance.findMany({
@@ -52,14 +60,17 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
         ...(batchId === undefined ? {} : { batchId: batchId ?? null }),
       },
     });
-    const onhand = balances.reduce((sum, b) => sum.plus(b.onhandQty.toString()), d(0));
+    const onhand = balances.reduce(
+      (sum, b) => sum.plus(b.onhandQty.toString()),
+      d(0),
+    );
 
     const reserved = await trx.stockReservation.aggregate({
       where: {
         tenantId,
         productId,
         warehouseId,
-        status: 'active',
+        status: "active",
         ...(batchId === undefined ? {} : { batchId: batchId ?? null }),
       },
       _sum: { qtyBaseUnit: true },
@@ -99,7 +110,10 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
       : [];
 
     const existingMap = new Map(
-      existing.map((b) => [`${b.tenantId}\u0000${b.productId}\u0000${b.warehouseId}\u0000${b.batchId ?? ''}\u0000${b.locationId ?? ''}`, b]),
+      existing.map((b) => [
+        `${b.tenantId}\u0000${b.productId}\u0000${b.warehouseId}\u0000${b.batchId ?? ""}\u0000${b.locationId ?? ""}`,
+        b,
+      ]),
     );
 
     const results: Array<{ key: BalanceKey; balanceAfter: string }> = [];
@@ -107,7 +121,7 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
     for (const c of sorted) {
       const batchId = nullKey(c.batchId);
       const locationId = nullKey(c.locationId);
-      const key = `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${batchId ?? ''}\u0000${locationId ?? ''}`;
+      const key = `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${batchId ?? ""}\u0000${locationId ?? ""}`;
       const existingRow = existingMap.get(key);
 
       let balanceAfter: string;
@@ -176,7 +190,10 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
       : [];
 
     const existingMap = new Map(
-      existing.map((b) => [`${b.tenantId}\u0000${b.productId}\u0000${b.warehouseId}\u0000${b.batchId ?? ''}\u0000${b.locationId ?? ''}`, b]),
+      existing.map((b) => [
+        `${b.tenantId}\u0000${b.productId}\u0000${b.warehouseId}\u0000${b.batchId ?? ""}\u0000${b.locationId ?? ""}`,
+        b,
+      ]),
     );
 
     const results: Array<{ key: BalanceKey; balanceAfter: string }> = [];
@@ -184,14 +201,14 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
     for (const c of sorted) {
       const batchId = nullKey(c.batchId);
       const locationId = nullKey(c.locationId);
-      const key = `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${batchId ?? ''}\u0000${locationId ?? ''}`;
+      const key = `${c.tenantId}\u0000${c.productId}\u0000${c.warehouseId}\u0000${batchId ?? ""}\u0000${locationId ?? ""}`;
       const existingRow = existingMap.get(key);
 
       if (!existingRow) {
-        throw new AppError('STOCK_INSUFFICIENT', 409, 'Không đủ tồn kho', [
+        throw new AppError("STOCK_INSUFFICIENT", 409, "Không đủ tồn kho", [
           {
             productId: c.productId,
-            available: '0',
+            available: "0",
             requested: c.qtyBaseUnit,
           },
         ]);
@@ -200,7 +217,7 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
       const current = d(existingRow.onhandQty.toString());
       const next = current.minus(c.qtyBaseUnit);
       if (next.isNegative()) {
-        throw new AppError('STOCK_INSUFFICIENT', 409, 'Không đủ tồn kho', [
+        throw new AppError("STOCK_INSUFFICIENT", 409, "Không đủ tồn kho", [
           {
             productId: c.productId,
             available: current.toString(),
@@ -222,12 +239,17 @@ export class StockBalanceService implements StockBalanceReader, StockBalanceWrit
       });
 
       if (updated.count === 0) {
-        throw new AppError('VERSION_CONFLICT', 409, 'Xung đột tồn kho, thử lại', [
-          { productId: c.productId },
-        ]);
+        throw new AppError(
+          "VERSION_CONFLICT",
+          409,
+          "Xung đột tồn kho, thử lại",
+          [{ productId: c.productId }],
+        );
       }
 
-      const after = await trx.stockBalance.findUniqueOrThrow({ where: { id: existingRow.id } });
+      const after = await trx.stockBalance.findUniqueOrThrow({
+        where: { id: existingRow.id },
+      });
       results.push({
         key: {
           tenantId: c.tenantId,

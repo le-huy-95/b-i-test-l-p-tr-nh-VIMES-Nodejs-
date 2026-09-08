@@ -1,3 +1,8 @@
+/**
+ * TIỆN ÍCH SỐ LƯỢNG TỒN KHO
+ * -------------------------
+ * Chuyển đổi/chuẩn hóa qty Decimal, tính available = onhand - reserved.
+ */
 import { Prisma } from '../../infra/prisma-types';
 import { prisma } from '../../infra/prisma';
 import { d, toDecimalString } from '../../utils/decimal';

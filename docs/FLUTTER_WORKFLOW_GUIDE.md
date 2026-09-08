@@ -5,7 +5,7 @@ Tài liệu này hướng dẫn cách xây dựng frontend Flutter dựa trên b
 - Cách tổ chức màn hình và state management
 - Luồng tạo/sửa/submit/duyệt/hoàn tất phiếu
 - Cách gọi API và gắn header bắt buộc
-- Cách render 4 bước chữ ký và giấy ủy quyền
+- Cách render stepper chữ ký theo template (xuất/nhập: 3 bước số; đầu kỳ: 4) và giấy ủy quyền
 - Cách xử lý lỗi, idempotency, retry và optimistic UI
 - Mapping dữ liệu backend sang model Flutter
 
@@ -18,7 +18,7 @@ Tài liệu này hướng dẫn cách xây dựng frontend Flutter dựa trên b
 3. [Service layer và API client](#3-service-layer-và-api-client)
 4. [Model dữ liệu Flutter](#4-model-dữ-liệu-flutter)
 5. [Luồng màn hình theo nghiệp vụ](#5-luồng-màn-hình-theo-nghiệp-vụ)
-6. [Cách render workflow 4 bước](#6-cách-render-workflow-4-bước)
+6. [Cách render workflow steps](#6-cách-render-workflow-steps)
 7. [Xử lý ký thay và giấy ủy quyền](#7-xử-lý-ký-thay-và-giấy-ủy-quyền)
 8. [Quy tắc phân quyền trên UI](#8-quy-tắc-phân-quyền-trên-ui)
 9. [Quy tắc validate form](#9-quy-tắc-validate-form)
@@ -267,7 +267,7 @@ class TimelineEvent {
 ### Mục tiêu
 
 - xem đầy đủ thông tin phiếu
-- xem workflow 4 bước
+- xem workflow steps theo template (không còn bước `delivery` số trên phiếu mới)
 - xem giấy ủy quyền
 - thực hiện action nếu có quyền
 
@@ -361,7 +361,7 @@ Xử lý các action:
 
 ---
 
-## 6. Cách render workflow 4 bước
+## 6. Cách render workflow steps
 
 ### 6.1 Hiển thị dạng stepper
 
@@ -660,7 +660,7 @@ Chỉ dùng logic UI để show/hide nút. Quyết định cuối cùng vẫn do
 
 ### Workflow
 
-- [ ] render 4 bước chữ ký
+- [ ] render steps theo template (`creator` → `warehouse` → `chief_accountant` [→ `admin`])
 - [ ] hiển thị note và time từng bước
 - [ ] hiển thị file ủy quyền
 - [ ] hỗ trợ proxy sign

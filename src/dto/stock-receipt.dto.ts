@@ -1,6 +1,12 @@
+/**
+ * Schema Zod và DTO cho phiếu nhập kho (stock receipt).
+ *
+ * Validate dòng hàng, thông tin kho/nhà cung cấp, loại nhập và người duyệt workflow.
+ */
 import { z } from 'zod';
 import { ReceiptType } from '../infra/prisma-types';
 
+/* Schema một dòng chi tiết phiếu nhập */
 export const stockReceiptLineSchema = z.object({
   productId: z.string(),
   unitName: z.string(),
@@ -12,6 +18,7 @@ export const stockReceiptLineSchema = z.object({
   manufactureDate: z.string().datetime().optional().or(z.string().optional()),
 });
 
+/* Schema tạo/cập nhật phiếu nhập — tối thiểu một dòng hàng */
 export const createStockReceiptSchema = z.object({
   warehouseId: z.string(),
   supplierId: z.string().optional(),
@@ -25,6 +32,7 @@ export const createStockReceiptSchema = z.object({
 
 export const updateStockReceiptSchema = createStockReceiptSchema;
 
+/* Schema từ chối chứng từ trong quy trình duyệt */
 export const rejectDocumentSchema = z.object({
   reason: z.string().optional(),
 });

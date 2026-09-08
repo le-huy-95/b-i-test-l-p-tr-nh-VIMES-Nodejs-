@@ -1,6 +1,13 @@
+/**
+ * Schema Zod và kiểu DTO cho module xác thực (auth).
+ *
+ * Bao gồm đăng ký, đăng nhập, OTP, refresh token, quên/đặt lại mật khẩu,
+ * đăng ký thiết bị push notification và đăng nhập Google.
+ */
 import { z } from 'zod';
 import { normalizeEmail, normalizePhone } from '../utils/auth-normalize';
 
+/* Trường email/phone có preprocess chuẩn hóa trước khi validate */
 const emailField = z.preprocess(
   (val) => (typeof val === 'string' ? normalizeEmail(val) : val),
   z.string().email(),
@@ -9,6 +16,8 @@ const phoneField = z.preprocess(
   (val) => (typeof val === 'string' ? normalizePhone(val) : val),
   z.string().min(8),
 );
+
+/* --- Thiết bị (FCM / push) --- */
 
 export const deviceSchema = z.object({
   deviceId: z.string().min(1),
@@ -19,6 +28,8 @@ export const deviceSchema = z.object({
   appVersion: z.string().optional(),
   deviceInfo: z.record(z.string(), z.unknown()).optional(),
 });
+
+/* --- Đăng ký & xác minh OTP --- */
 
 export const registerSchema = z
   .object({
@@ -34,6 +45,8 @@ export const verifyOtpSchema = z.object({
   phone: phoneField.optional(),
   code: z.string().length(6),
 });
+
+/* --- Đăng nhập & phiên --- */
 
 export const loginSchema = z
   .object({
@@ -52,6 +65,8 @@ export const resendOtpSchema = z.object({
   phone: phoneField.optional(),
 });
 
+/* --- Quên mật khẩu --- */
+
 export const forgotPasswordSchema = z.object({
   email: emailField,
 });
@@ -67,9 +82,13 @@ export const logoutSchema = z.object({
   deviceId: z.string().min(1).optional(),
 });
 
+/* --- OAuth --- */
+
 export const googleLoginSchema = z.object({
   idToken: z.string().min(1),
 });
+
+/* --- Kiểu TypeScript suy ra từ schema --- */
 
 export type RegisterDto = z.infer<typeof registerSchema>;
 export type VerifyOtpDto = z.infer<typeof verifyOtpSchema>;

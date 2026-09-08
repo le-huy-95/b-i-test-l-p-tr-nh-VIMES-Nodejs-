@@ -1,3 +1,10 @@
+/**
+ * Lưu trữ object trên MinIO (S3-compatible) cho file tenant (logo, ...).
+ *
+ * Triển khai port ObjectStorage: upload/delete object, map URL ↔ object key,
+ * tự tạo bucket và policy public read nếu chưa có. URL public có thể override
+ * bằng MINIO_PUBLIC_URL cho client mobile/web.
+ */
 import {
   CreateBucketCommand,
   DeleteObjectCommand,
@@ -9,6 +16,7 @@ import {
 import { env } from '../config/env';
 import type { ObjectStorage } from '../modules/tenant/object-storage.port';
 
+/** Ánh xạ MIME type logo được phép → phần mở rộng file */
 const MIME_TO_EXT: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/png': '.png',
@@ -19,11 +27,17 @@ const MIME_TO_EXT: Record<string, string> = {
 export const ALLOWED_LOGO_MIME_TYPES = Object.keys(MIME_TO_EXT);
 export const MAX_LOGO_SIZE_BYTES = 2 * 1024 * 1024;
 
+/**
+ * Endpoint nội bộ MinIO (host:port, http/https theo env).
+ */
 function minioEndpoint(): string {
   const protocol = env.MINIO_USE_SSL === 'true' ? 'https' : 'http';
   return `${protocol}://${env.MINIO_ENDPOINT}:${env.MINIO_PORT}`;
 }
 
+/**
+ * Base URL nội bộ kèm tên bucket (path-style).
+ */
 function internalBaseUrl(): string {
   return `${minioEndpoint()}/${env.MINIO_BUCKET}`;
 }
@@ -36,6 +50,9 @@ function publicBaseUrl(): string {
   return internalBaseUrl();
 }
 
+/**
+ * Các prefix URL hợp lệ khi parse object key từ URL đã lưu (public + internal).
+ */
 function urlPrefixes(): string[] {
   const prefixes = new Set<string>();
   prefixes.add(`${publicBaseUrl()}/`);
@@ -47,6 +64,9 @@ export class MinioObjectStorage implements ObjectStorage {
   private client: S3Client | null = null;
   private bucketReady: Promise<void> | null = null;
 
+  /**
+   * Lazy khởi tạo S3Client trỏ tới MinIO với path-style và credential env.
+   */
   private getClient(): S3Client {
     if (!this.client) {
       this.client = new S3Client({
@@ -62,6 +82,9 @@ export class MinioObjectStorage implements ObjectStorage {
     return this.client;
   }
 
+  /**
+   * Đảm bảo bucket tồn tại và có policy cho phép GetObject public (logo tenant).
+   */
   private async ensureBucket(): Promise<void> {
     if (!this.bucketReady) {
       this.bucketReady = (async () => {
@@ -93,6 +116,9 @@ export class MinioObjectStorage implements ObjectStorage {
     await this.bucketReady;
   }
 
+  /**
+   * Upload buffer lên key; trả URL public để lưu DB / trả API.
+   */
   async uploadObject(key: string, body: Buffer, contentType: string): Promise<string> {
     await this.ensureBucket();
     await this.getClient().send(
@@ -106,6 +132,9 @@ export class MinioObjectStorage implements ObjectStorage {
     return `${publicBaseUrl()}/${key}`;
   }
 
+  /**
+   * Xóa object theo key (vd. khi đổi/xóa logo tenant).
+   */
   async deleteObject(key: string): Promise<void> {
     await this.ensureBucket();
     await this.getClient().send(
@@ -116,6 +145,9 @@ export class MinioObjectStorage implements ObjectStorage {
     );
   }
 
+  /**
+   * Trích object key từ URL đầy đủ; null nếu URL không thuộc MinIO đã cấu hình.
+   */
   objectKeyFromUrl(url: string): string | null {
     for (const prefix of urlPrefixes()) {
       if (url.startsWith(prefix)) {
@@ -126,12 +158,19 @@ export class MinioObjectStorage implements ObjectStorage {
   }
 }
 
+/**
+ * Lấy extension file logo từ MIME; null nếu không được phép.
+ */
 export function logoExtensionForMime(mimeType: string): string | null {
   return MIME_TO_EXT[mimeType] ?? null;
 }
 
+/**
+ * Key chuẩn cho logo tenant: tenants/{tenantId}/logo{ext}
+ */
 export function tenantLogoObjectKey(tenantId: string, extension: string): string {
   return `tenants/${tenantId}/logo${extension}`;
 }
 
+/** Instance singleton object storage */
 export const objectStorage = new MinioObjectStorage();

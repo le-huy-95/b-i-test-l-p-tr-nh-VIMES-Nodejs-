@@ -1,3 +1,9 @@
+/**
+ * PORT XÁC THỰC GOOGLE
+ * --------------------
+ * Interface verify Google ID Token (Firebase Admin).
+ * Implementation: infra/firebase-google-auth.ts
+ */
 export interface GoogleVerifiedId {
   uid: string;
   email?: string;

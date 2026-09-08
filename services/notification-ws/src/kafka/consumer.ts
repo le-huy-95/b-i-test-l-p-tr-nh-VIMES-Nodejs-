@@ -1,3 +1,17 @@
+/**
+ * Kafka consumer group `notification-ws`.
+ *
+ * Pipeline mỗi message:
+ * 1. Parse JSON + validate Zod (tenantNotificationEventSchema)
+ * 2. RecipientResolver → danh sách userId
+ * 3. Batch song song (5 user/lần): createFromEvent (idempotent)
+ * 4. Thành công → relay.pushNotification (Pub/Sub → WS)
+ *
+ * Message lỗi schema / JSON: log và skip (không retry vô hạn poison pill).
+ * createFromEvent fail từng user: log, không làm fail cả batch.
+ *
+ * KAFKA_ENABLED !== 'true' → no-op, trả stop function rỗng.
+ */
 import { Kafka } from 'kafkajs';
 import { z } from 'zod';
 import { env } from '../../../../src/config/env';
@@ -9,8 +23,13 @@ import { RecipientResolver } from '../modules/recipient.resolver';
 import type Redis from 'ioredis';
 import type { NotificationPushRelay } from '../ws/push-relay';
 
+/** Số recipient xử lý song song mỗi vòng — giới hạn load DB khi broadcast tenant_roles. */
 const RECIPIENT_CONCURRENCY = 5;
 
+/**
+ * Kết nối, subscribe topic, chạy consumer.
+ * @returns hàm stop (disconnect) để graceful shutdown
+ */
 export async function startNotificationConsumer(
   redis: Redis | null,
   relay: NotificationPushRelay,
@@ -25,6 +44,7 @@ export async function startNotificationConsumer(
     brokers: env.KAFKA_BROKERS.split(',').map((b) => b.trim()),
   });
 
+  // Cùng groupId → nhiều replica chia partition, mỗi event chỉ 1 instance xử lý
   const consumer = kafka.consumer({ groupId: 'notification-ws' });
   const cache = new RedisNotifCache(redis);
   const notificationService = new NotificationService(prisma, cache);
@@ -63,6 +83,7 @@ export async function startNotificationConsumer(
         const results = await Promise.allSettled(
           batch.map(async (userId) => {
             const result = await notificationService.createFromEvent(userId, event);
+            // null = đã tồn tại (idempotent) → không push trùng
             if (!result) return;
             await relay.pushNotification(userId, result.item, result.unreadCount);
           }),

@@ -146,10 +146,23 @@ describe('document workflow service', () => {
       mockStepFindMany.mockResolvedValue([]);
 
       const { documentWorkflowService } = await import('../../src/modules/document-workflow/document-workflow.service');
-      const result = await documentWorkflowService.initWorkflow('tenant-1', 'stock_issue', 'doc-1', actor, mockAdapter);
+      const result = await documentWorkflowService.initWorkflow(
+        'tenant-1',
+        'stock_issue',
+        'doc-1',
+        actor,
+        mockAdapter,
+        ['user-warehouse', 'user-accountant'],
+      );
 
       expect(mockWorkflowCreate).toHaveBeenCalled();
       expect(mockStepCreateMany).toHaveBeenCalled();
+      const stepsArg = mockStepCreateMany.mock.calls[0][0].data;
+      expect(stepsArg.map((s: { stepCode: string }) => s.stepCode)).toEqual([
+        'creator',
+        'warehouse',
+        'chief_accountant',
+      ]);
       expect(result.id).toBe('wf-1');
     });
 

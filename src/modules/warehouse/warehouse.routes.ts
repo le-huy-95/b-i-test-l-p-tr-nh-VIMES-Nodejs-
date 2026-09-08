@@ -1,3 +1,8 @@
+/**
+ * ROUTES KHO (/api/v1/warehouses)
+ * -------------------------------
+ * CRUD kho hàng trong phạm vi tenant, yêu cầu auth + tenant middleware.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

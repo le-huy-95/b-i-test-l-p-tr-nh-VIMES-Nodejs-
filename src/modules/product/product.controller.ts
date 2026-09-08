@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER SẢN PHẨM
+ * -------------------
+ * HTTP handler cho product CRUD và tìm kiếm.
+ */
 import { Request, Response } from 'express';
 import { productService } from './product.service';
 

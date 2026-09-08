@@ -28,6 +28,8 @@ ingress:
     service: http://localhost:${BACKEND_PORT}
   - hostname: webhook.kimbap.io.vn
     service: http://localhost:${BACKEND_PORT}
+  - hostname: storage.kimbap.io.vn
+    service: http://localhost:9000
   - service: http://localhost:${BACKEND_PORT}
 EOF
 

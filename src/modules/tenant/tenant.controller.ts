@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER TENANT
+ * -----------------
+ * HTTP handler cho CRUD tenant, members, invites, platform admin operations.
+ */
 import { Request, Response } from 'express';
 import { tenantService } from './tenant.service';
 

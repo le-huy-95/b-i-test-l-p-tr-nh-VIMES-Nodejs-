@@ -1,20 +1,35 @@
-import type { PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import { hashPassword, randomToken, verifyPassword } from '../../utils/crypto';
-import { normalizeEmail } from '../../utils/auth-normalize';
-import { googleLoginSchema, loginSchema, registerSchema } from '../../dto/auth.dto';
-import { otpService } from './otp.service';
-import { tokenService } from './token.service';
-import { deviceService } from './device.service';
-import type { OtpIssuer } from './otp.port';
-import type { TokenIssuer } from './token.port';
-import type { DeviceRegistry } from './device.port';
-import type { GoogleTokenVerifier } from './google-auth.port';
-import { googleAuth } from '../../infra/firebase-google-auth';
-import { NOTIFICATION_EVENT_TYPES } from '../../shared/notifications/event-types';
-import { actorLabel, publishTenantNotification } from '../../shared/notifications/publish';
+/**
+ * Dịch vụ xác thực (Auth) — lớp nghiệp vụ trung tâm cho đăng ký, đăng nhập,
+ * OTP, Google Sign-In, phiên làm việc và thông báo đăng nhập theo tenant.
+ *
+ * Phối hợp các port: OtpIssuer, TokenIssuer, DeviceRegistry, GoogleTokenVerifier.
+ * Không xử lý HTTP trực tiếp; được gọi từ AuthController.
+ */
+import type { PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import { hashPassword, randomToken, verifyPassword } from "../../utils/crypto";
+import { normalizeEmail } from "../../utils/auth-normalize";
+import {
+  googleLoginSchema,
+  loginSchema,
+  registerSchema,
+} from "../../dto/auth.dto";
+import { otpService } from "./otp.service";
+import { tokenService } from "./token.service";
+import { deviceService } from "./device.service";
+import type { OtpIssuer } from "./otp.port";
+import type { TokenIssuer } from "./token.port";
+import type { DeviceRegistry } from "./device.port";
+import type { GoogleTokenVerifier } from "./google-auth.port";
+import { googleAuth } from "../../infra/firebase-google-auth";
+import { NOTIFICATION_EVENT_TYPES } from "../../shared/notifications/event-types";
+import {
+  actorLabel,
+  publishTenantNotification,
+} from "../../shared/notifications/publish";
 
+/** Lớp dịch vụ xác thực — điều phối luồng người dùng từ đăng ký đến phiên. */
 export class AuthService {
   constructor(
     private readonly db: PrismaClient = prisma,
@@ -24,17 +39,22 @@ export class AuthService {
     private readonly google: GoogleTokenVerifier = googleAuth,
   ) {}
 
+  /** Đăng ký tài khoản mới; gửi OTP xác minh email nếu có email. */
   async register(input: unknown) {
     const data = registerSchema.parse(input);
     if (data.email) {
       const exists = await this.db.user.findFirst({
-        where: { email: { equals: data.email, mode: 'insensitive' } },
+        where: { email: { equals: data.email, mode: "insensitive" } },
       });
-      if (exists) throw new AppError('EMAIL_EXISTS', 409, 'Email already registered');
+      if (exists)
+        throw new AppError("EMAIL_EXISTS", 409, "Email already registered");
     }
     if (data.phone) {
-      const exists = await this.db.user.findUnique({ where: { phone: data.phone } });
-      if (exists) throw new AppError('PHONE_EXISTS', 409, 'Phone already registered');
+      const exists = await this.db.user.findUnique({
+        where: { phone: data.phone },
+      });
+      if (exists)
+        throw new AppError("PHONE_EXISTS", 409, "Phone already registered");
     }
 
     const passwordHash = await hashPassword(data.password);
@@ -48,7 +68,13 @@ export class AuthService {
     });
 
     if (data.email) {
-      await this.otp.issueOtp(user.id, 'email', 'verify_email', data.email, data.name ?? undefined);
+      await this.otp.issueOtp(
+        user.id,
+        "email",
+        "verify_email",
+        data.email,
+        data.name ?? undefined,
+      );
     }
 
     return {
@@ -59,41 +85,56 @@ export class AuthService {
     };
   }
 
+  /** Xác minh mã OTP (email hoặc số điện thoại). */
   async verifyOtp(input: unknown) {
     return this.otp.verifyOtp(input);
   }
 
+  /** Gửi lại mã OTP xác minh. */
   async resendOtp(input: unknown) {
     return this.otp.resendOtp(input);
   }
 
+  /** Yêu cầu đặt lại mật khẩu qua OTP email. */
   async forgotPassword(input: unknown) {
     return this.otp.requestPasswordReset(input);
   }
 
+  /** Đặt lại mật khẩu bằng mã OTP hợp lệ. */
   async resetPassword(input: unknown) {
     return this.otp.resetPasswordWithOtp(input);
   }
 
+  /** Đăng nhập bằng email/số điện thoại và mật khẩu. */
   async login(input: unknown) {
     const data = loginSchema.parse(input);
     const user = data.email
       ? await this.db.user.findFirst({
-          where: { email: { equals: data.email, mode: 'insensitive' } },
+          where: { email: { equals: data.email, mode: "insensitive" } },
         })
       : await this.db.user.findUnique({ where: { phone: data.phone } });
 
     if (!user || !(await verifyPassword(data.password, user.passwordHash))) {
-      throw new AppError('INVALID_CREDENTIALS', 401, 'Email/số điện thoại hoặc mật khẩu không đúng');
+      throw new AppError(
+        "INVALID_CREDENTIALS",
+        401,
+        "Email/số điện thoại hoặc mật khẩu không đúng",
+      );
     }
-    if (!user.isActive) throw new AppError('USER_INACTIVE', 403, 'User inactive');
+    if (!user.isActive)
+      throw new AppError("USER_INACTIVE", 403, "User inactive");
 
     return this.buildSessionResponse(user);
   }
 
+  /** Đăng nhập hoặc liên kết tài khoản qua Google ID token (Firebase). */
   async loginWithGoogle(input: unknown) {
     if (!this.google.isConfigured()) {
-      throw new AppError('GOOGLE_AUTH_DISABLED', 503, 'Google Sign-In is not configured');
+      throw new AppError(
+        "GOOGLE_AUTH_DISABLED",
+        503,
+        "Google Sign-In is not configured",
+      );
     }
 
     const { idToken } = googleLoginSchema.parse(input);
@@ -102,12 +143,23 @@ export class AuthService {
     try {
       decoded = await this.google.verifyIdToken(idToken);
     } catch (err) {
-      console.error('[auth/google] verify Google ID token failed:', err instanceof Error ? err.message : err);
-      throw new AppError('INVALID_GOOGLE_TOKEN', 401, 'Invalid or expired Google ID token');
+      console.error(
+        "[auth/google] verify Google ID token failed:",
+        err instanceof Error ? err.message : err,
+      );
+      throw new AppError(
+        "INVALID_GOOGLE_TOKEN",
+        401,
+        "Invalid or expired Google ID token",
+      );
     }
 
     if (!decoded.email) {
-      throw new AppError('INVALID_GOOGLE_TOKEN', 401, 'Google account email is required');
+      throw new AppError(
+        "INVALID_GOOGLE_TOKEN",
+        401,
+        "Google account email is required",
+      );
     }
 
     const email = normalizeEmail(decoded.email);
@@ -117,15 +169,15 @@ export class AuthService {
 
     if (!user) {
       const byEmail = await this.db.user.findFirst({
-        where: { email: { equals: email, mode: 'insensitive' } },
+        where: { email: { equals: email, mode: "insensitive" } },
       });
 
       if (byEmail) {
         if (byEmail.googleId && byEmail.googleId !== googleId) {
           throw new AppError(
-            'GOOGLE_ACCOUNT_CONFLICT',
+            "GOOGLE_ACCOUNT_CONFLICT",
             409,
-            'Email already linked to another Google account',
+            "Email already linked to another Google account",
           );
         }
         user = await this.db.user.update({
@@ -151,29 +203,35 @@ export class AuthService {
       }
     }
 
-    if (!user.isActive) throw new AppError('USER_INACTIVE', 403, 'User inactive');
+    if (!user.isActive)
+      throw new AppError("USER_INACTIVE", 403, "User inactive");
 
     return this.buildSessionResponse(user);
   }
 
+  /** Đăng ký hoặc cập nhật thiết bị (FCM) của người dùng. */
   async registerDevice(userId: string, input: unknown) {
     return this.devices.registerDevice(userId, input);
   }
 
+  /** Làm mới access token bằng refresh token (xoay token). */
   async refresh(input: unknown) {
     return this.tokens.refresh(input);
   }
 
+  /** Đăng xuất — thu hồi refresh token và vô hiệu thiết bị nếu có. */
   async logout(input: unknown) {
     return this.tokens.logout(input);
   }
 
+  /** Lấy hồ sơ người dùng hiện tại theo userId từ JWT. */
   async me(userId: string) {
     const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
+    if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
     return this.buildProfileResponse(user);
   }
 
+  /** Truy vấn danh sách tenant mà người dùng đang tham gia (active). */
   private async buildTenantMemberships(userId: string) {
     return this.db.userTenant.findMany({
       where: { userId, isActive: true },
@@ -181,6 +239,10 @@ export class AuthService {
     });
   }
 
+  /**
+   * Tạo phản hồi phiên đăng nhập: token, profile, danh sách tenant
+   * và gửi thông báo USER_LOGIN tới admin các tenant liên quan.
+   */
   private async buildSessionResponse(user: {
     id: string;
     email: string | null;
@@ -204,14 +266,14 @@ export class AuthService {
           tenantId: membership.tenantId,
           actorUserId: user.id,
           actorName: loginUserName,
-          source: { type: 'user', id: user.id },
-          recipientPolicy: { type: 'tenant_roles', roles: ['admin'] },
+          source: { type: "user", id: user.id },
+          recipientPolicy: { type: "tenant_roles", roles: ["admin"] },
           notification: {
-            title: 'Thành viên đăng nhập',
+            title: "Thành viên đăng nhập",
             body: `${loginUserName} vừa đăng nhập vào hệ thống`,
-            targetType: 'tenant_list',
+            targetType: "tenant_list",
             targetId: membership.tenantId,
-            routeName: 'tenant_members',
+            routeName: "tenant_members",
             routeParams: { tenantId: membership.tenantId },
             deeplink: `myapp://tenants/${membership.tenantId}/members`,
           },
@@ -233,6 +295,7 @@ export class AuthService {
     };
   }
 
+  /** Chuẩn hóa dữ liệu hồ sơ người dùng trả về API. */
   private buildProfileResponse(user: {
     id: string;
     email: string | null;
@@ -254,4 +317,11 @@ export class AuthService {
   }
 }
 
-export const authService = new AuthService(prisma, otpService, tokenService, deviceService, googleAuth);
+/** Instance mặc định của AuthService dùng trong toàn ứng dụng. */
+export const authService = new AuthService(
+  prisma,
+  otpService,
+  tokenService,
+  deviceService,
+  googleAuth,
+);

@@ -19,6 +19,13 @@ const mockCache = {
   set: vi.fn().mockResolvedValue(undefined),
   invalidatePattern: vi.fn(),
   invalidate: vi.fn(),
+  getOrSet: vi.fn(async (key: string, loader: () => Promise<unknown>, ttl?: number) => {
+    const cached = await mockCache.get(key);
+    if (cached != null) return cached;
+    const value = await loader();
+    await mockCache.set(key, value, ttl);
+    return value;
+  }),
 };
 
 vi.mock('../../src/infra/prisma', () => ({

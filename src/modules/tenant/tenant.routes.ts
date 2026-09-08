@@ -1,3 +1,8 @@
+/**
+ * ROUTES TENANT (/api/v1/tenants/current)
+ * ---------------------------------------
+ * Quản lý tenant hiện tại: thông tin, thành viên, mời người, phân quyền kho.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

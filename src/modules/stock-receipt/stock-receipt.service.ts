@@ -1,29 +1,41 @@
-import type { PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import { generateNextCode } from '../../utils/numbering';
-import { toDecimalString } from '../../utils/decimal';
-import { buildStockReceiptChanges, buildStockReceiptDetails } from '../stock-balance/stock-document-line.helpers';
-import type { StockPostingPort } from '../stock-balance/stock-posting.port';
-import { stockPostingService } from '../stock-balance/stock-posting.service';
-import { createStockReceiptSchema, updateStockReceiptSchema } from '../../dto/stock-receipt.dto';
-import { paginationSchema, paginate } from '../../dto/pagination.dto';
-import { listCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { cacheInvalidationService } from '../../infra/cache-invalidation';
-import type { StockDocActor } from '../../shared/notifications/stock-doc-notify';
+/**
+ * DỊCH VỤ PHIẾU NHẬP KHO
+ * ----------------------
+ * Tạo phiếu nhập từ NCC, workflow duyệt, posting tồn kho khi completed.
+ * Hỗ trợ batch/lot, costing, thông báo realtime.
+ */
+import type { PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import { generateNextCode } from "../../utils/numbering";
+import { toDecimalString } from "../../utils/decimal";
+import {
+  buildStockReceiptChanges,
+  buildStockReceiptDetails,
+} from "../stock-balance/stock-document-line.helpers";
+import type { StockPostingPort } from "../stock-balance/stock-posting.port";
+import { stockPostingService } from "../stock-balance/stock-posting.service";
+import {
+  createStockReceiptSchema,
+  updateStockReceiptSchema,
+} from "../../dto/stock-receipt.dto";
+import { paginationSchema, paginate } from "../../dto/pagination.dto";
+import { listCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { cacheInvalidationService } from "../../infra/cache-invalidation";
+import type { StockDocActor } from "../../shared/notifications/stock-doc-notify";
 import {
   notifyReceiptApproved,
   notifyReceiptCancelled,
   notifyReceiptCompleted,
   notifyReceiptRejected,
   notifyReceiptSubmitted,
-} from '../../shared/notifications/stock-doc-notify';
-import { documentWorkflowService } from '../document-workflow/document-workflow.service';
-import { getDocumentAdapter } from '../document-workflow/adapters/stock-document-adapter';
-import { enqueueStockMutationCompletion } from '../../infra/stock-mutation-queue';
+} from "../../shared/notifications/stock-doc-notify";
+import { documentWorkflowService } from "../document-workflow/document-workflow.service";
+import { getDocumentAdapter } from "../document-workflow/adapters/stock-document-adapter";
+import { enqueueStockMutationCompletion } from "../../infra/stock-mutation-queue";
 
-const CACHE_PREFIX = 'list:stock-receipts';
+const CACHE_PREFIX = "list:stock-receipts";
 
 export class StockReceiptService {
   constructor(
@@ -32,56 +44,58 @@ export class StockReceiptService {
     private readonly cache: ListCache = listCache,
   ) {}
 
+  /** Danh sách phiếu nhập — cache Redis, hỗ trợ phân trang */
   async list(tenantId: string, query?: unknown) {
-    const cacheSuffix = !query || Object.keys(query as object).length === 0
-      ? 'all'
-      : JSON.stringify(paginationSchema.parse(query));
+    const cacheSuffix =
+      !query || Object.keys(query as object).length === 0
+        ? "all"
+        : JSON.stringify(paginationSchema.parse(query));
     const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    const cached = await this.cache.get<unknown>(cacheKey);
-    if (cached) return cached;
-
-    if (!query || Object.keys(query as object).length === 0) {
-      const data = await this.db.stockReceipt.findMany({
-        where: { tenantId },
-        include: { details: true },
-        orderBy: { createdAt: 'desc' },
-      });
-      await this.cache.set(cacheKey, data);
-      return data;
-    }
-    const { page, limit } = paginationSchema.parse(query);
-    const where = { tenantId };
-    const [data, total] = await Promise.all([
-      this.db.stockReceipt.findMany({
-        where,
-        include: { details: true },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.db.stockReceipt.count({ where }),
-    ]);
-    const result = paginate(data, page, limit, total);
-    await this.cache.set(cacheKey, result);
-    return result;
+    return this.cache.getOrSet(cacheKey, async () => {
+      if (!query || Object.keys(query as object).length === 0) {
+        return this.db.stockReceipt.findMany({
+          where: { tenantId },
+          include: { details: true },
+          orderBy: { createdAt: "desc" },
+        });
+      }
+      const { page, limit } = paginationSchema.parse(query);
+      const where = { tenantId };
+      const [data, total] = await Promise.all([
+        this.db.stockReceipt.findMany({
+          where,
+          include: { details: true },
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.db.stockReceipt.count({ where }),
+      ]);
+      return paginate(data, page, limit, total);
+    });
   }
 
+  /** Chi tiết 1 phiếu nhập kèm dòng hàng */
   async get(tenantId: string, id: string) {
     const doc = await this.db.stockReceipt.findFirst({
       where: { id, tenantId },
       include: { details: true, supplier: true, warehouse: true },
     });
-    if (!doc) throw new AppError('NOT_FOUND', 404, 'Receipt not found');
+    if (!doc) throw new AppError("NOT_FOUND", 404, "Receipt not found");
     return doc;
   }
 
+  /** Tạo phiếu nhập mới ở trạng thái draft, sinh mã tự động */
   async create(tenantId: string, userId: string, input: unknown) {
     const data = createStockReceiptSchema.parse(input);
     assertSupportedReceiptType(data.receiptType);
     await assertTrackedReceiptLines(this.db, tenantId, data.lines);
-    const code = await generateNextCode(tenantId, 'stock_receipt');
+    const code = await generateNextCode(tenantId, "stock_receipt");
 
-    const { details, total } = await buildStockReceiptDetails(this.db, data.lines);
+    const { details, total } = await buildStockReceiptDetails(
+      this.db,
+      data.lines,
+    );
     const result = await this.db.stockReceipt.create({
       data: {
         tenantId,
@@ -99,10 +113,10 @@ export class StockReceiptService {
       include: { details: true },
     });
 
-    const adapter = getDocumentAdapter('stock_receipt');
+    const adapter = getDocumentAdapter("stock_receipt");
     await documentWorkflowService.initWorkflow(
       tenantId,
-      'stock_receipt',
+      "stock_receipt",
       result.id,
       { userId, name: undefined },
       adapter,
@@ -113,16 +127,23 @@ export class StockReceiptService {
     return result;
   }
 
+  /** Cập nhật phiếu draft — không cho sửa khi đã submit/duyệt */
   async update(tenantId: string, id: string, input: unknown) {
     const doc = await this.get(tenantId, id);
-    if (doc.status !== 'draft') {
-      throw new AppError('INVALID_STATUS_TRANSITION', 409, 'Only draft receipts can be updated');
+    if (doc.status !== "draft") {
+      throw new AppError(
+        "INVALID_STATUS_TRANSITION",
+        409,
+        "Only draft receipts can be updated",
+      );
     }
     const data = updateStockReceiptSchema.parse(input);
     assertSupportedReceiptType(data.receiptType);
     await assertTrackedReceiptLines(this.db, tenantId, data.lines);
-    const { details, total } = await buildStockReceiptDetails(this.db, data.lines);
-
+    const { details, total } = await buildStockReceiptDetails(
+      this.db,
+      data.lines,
+    );
 
     const result = await this.db.$transaction(async (trx) => {
       await trx.stockReceiptDetail.deleteMany({ where: { receiptId: id } });
@@ -146,11 +167,17 @@ export class StockReceiptService {
     return result;
   }
 
-  private async transition(tenantId: string, id: string, from: string[], to: string, extra: object = {}) {
+  private async transition(
+    tenantId: string,
+    id: string,
+    from: string[],
+    to: string,
+    extra: object = {},
+  ) {
     const doc = await this.get(tenantId, id);
     if (!from.includes(doc.status)) {
       throw new AppError(
-        'INVALID_STATUS_TRANSITION',
+        "INVALID_STATUS_TRANSITION",
         409,
         `Cannot transition from ${doc.status} to ${to}`,
       );
@@ -164,47 +191,83 @@ export class StockReceiptService {
     return result;
   }
 
+  /** Gửi duyệt — khởi tạo workflow và chuyển sang pending_approval */
   async submit(tenantId: string, id: string, actor: StockDocActor) {
-    const result = await this.transition(tenantId, id, ['draft'], 'pending_approval');
+    const result = await this.transition(
+      tenantId,
+      id,
+      ["draft"],
+      "pending_approval",
+    );
     await notifyReceiptSubmitted(tenantId, result, actor);
     return result;
   }
 
+  /** Duyệt phiếu qua workflow engine */
   async approve(tenantId: string, id: string, actor: StockDocActor) {
-    const result = await this.transition(tenantId, id, ['pending_approval'], 'approved', {
-      approvedById: actor.userId,
-      approvedAt: new Date(),
-    });
+    const result = await this.transition(
+      tenantId,
+      id,
+      ["pending_approval"],
+      "approved",
+      {
+        approvedById: actor.userId,
+        approvedAt: new Date(),
+      },
+    );
     await notifyReceiptApproved(tenantId, result, actor);
     return result;
   }
 
-  async reject(tenantId: string, id: string, reason: string, actor: StockDocActor) {
-    const result = await this.transition(tenantId, id, ['pending_approval'], 'rejected', {
-      rejectReason: reason,
-    });
+  /** Từ chối phiếu — workflow reject, trả về trạng thái rejected */
+  async reject(
+    tenantId: string,
+    id: string,
+    reason: string,
+    actor: StockDocActor,
+  ) {
+    const result = await this.transition(
+      tenantId,
+      id,
+      ["pending_approval"],
+      "rejected",
+      {
+        rejectReason: reason,
+      },
+    );
     await notifyReceiptRejected(tenantId, result, actor);
     return result;
   }
 
+  /** Hủy phiếu (draft hoặc pending) — không ảnh hưởng tồn kho */
   async cancel(tenantId: string, id: string, actor: StockDocActor) {
-    const result = await this.transition(tenantId, id, ['draft', 'pending_approval', 'approved'], 'cancelled');
+    const result = await this.transition(
+      tenantId,
+      id,
+      ["draft", "pending_approval", "approved"],
+      "cancelled",
+    );
     await notifyReceiptCancelled(tenantId, result, actor);
     return result;
   }
 
+  /** Hoàn thành phiếu — đưa vào hàng đợi posting tồn kho bất đồng bộ */
   async complete(tenantId: string, id: string, actor: StockDocActor) {
     const receipt = await this.get(tenantId, id);
-    if (receipt.status === 'completed') {
-      return { queued: false, jobId: null, status: 'completed' };
+    if (receipt.status === "completed") {
+      return { queued: false, jobId: null, status: "completed" };
     }
-    if (receipt.status !== 'approved') {
-      throw new AppError('INVALID_STATUS_TRANSITION', 409, `Cannot complete from ${receipt.status}`);
+    if (receipt.status !== "approved") {
+      throw new AppError(
+        "INVALID_STATUS_TRANSITION",
+        409,
+        `Cannot complete from ${receipt.status}`,
+      );
     }
 
     const existingJob = await enqueueStockMutationCompletion({
       tenantId,
-      documentType: 'stock_receipt',
+      documentType: "stock_receipt",
       documentId: id,
       actor,
     });
@@ -212,48 +275,69 @@ export class StockReceiptService {
     return {
       queued: true,
       jobId: existingJob.jobId,
-      status: 'queued',
+      status: "queued",
     };
   }
 
+  /** Hoàn thành đồng bộ ngay — posting tồn kho trong cùng request */
   async completeNow(tenantId: string, id: string, actor: StockDocActor) {
     try {
       const result = await this.db.$transaction(async (trx) => {
         const rows = await trx.$queryRaw<
-          Array<{ id: string; status: string; warehouse_id: string; supplier_id: string | null }>
+          Array<{
+            id: string;
+            status: string;
+            warehouse_id: string;
+            supplier_id: string | null;
+          }>
         >`
           SELECT id, status, warehouse_id, supplier_id FROM stock_receipts
           WHERE id = ${id} AND tenant_id = ${tenantId}
           FOR UPDATE
         `;
         const receipt = rows[0];
-        if (!receipt) throw new AppError('NOT_FOUND', 404, 'Receipt not found');
-        if (receipt.status === 'completed') {
-          throw new AppError('IDEMPOTENT_SKIP', 200, 'Phiếu đã được hoàn tất trước đó');
-        }
-        if (receipt.status !== 'approved') {
+        if (!receipt) throw new AppError("NOT_FOUND", 404, "Receipt not found");
+        if (receipt.status === "completed") {
           throw new AppError(
-            'INVALID_STATUS_TRANSITION',
+            "IDEMPOTENT_SKIP",
+            200,
+            "Phiếu đã được hoàn tất trước đó",
+          );
+        }
+        if (receipt.status !== "approved") {
+          throw new AppError(
+            "INVALID_STATUS_TRANSITION",
             409,
             `Cannot complete from ${receipt.status}`,
           );
         }
 
-        const details = await trx.stockReceiptDetail.findMany({ where: { receiptId: id } });
-        const changes = await buildStockReceiptChanges(trx, tenantId, receipt, details);
+        const details = await trx.stockReceiptDetail.findMany({
+          where: { receiptId: id },
+        });
+        const changes = await buildStockReceiptChanges(
+          trx,
+          tenantId,
+          receipt,
+          details,
+        );
 
         await this.posting.apply(
           {
-            direction: 'in',
+            direction: "in",
             changes,
-            ledger: { refDocType: 'stock_receipt', refDocId: id, createdById: actor.userId },
+            ledger: {
+              refDocType: "stock_receipt",
+              refDocId: id,
+              createdById: actor.userId,
+            },
           },
           trx,
         );
 
         const updated = await trx.stockReceipt.update({
           where: { id },
-          data: { status: 'completed', completedAt: new Date() },
+          data: { status: "completed", completedAt: new Date() },
           include: { details: true },
         });
         await cacheInvalidationService.invalidateStockMutations(tenantId);
@@ -262,17 +346,22 @@ export class StockReceiptService {
       await notifyReceiptCompleted(tenantId, result, actor);
       return result;
     } catch (err) {
-      if (err instanceof AppError && err.code === 'IDEMPOTENT_SKIP') {
+      if (err instanceof AppError && err.code === "IDEMPOTENT_SKIP") {
         return this.get(tenantId, id);
       }
       throw err;
     }
   }
 
+  /** Sao chép phiếu bị reject thành phiếu draft mới để chỉnh sửa lại */
   async cloneFromRejected(tenantId: string, id: string, userId: string) {
     const src = await this.get(tenantId, id);
-    if (src.status !== 'rejected') {
-      throw new AppError('INVALID_STATUS_TRANSITION', 409, 'Only rejected receipts can be cloned');
+    if (src.status !== "rejected") {
+      throw new AppError(
+        "INVALID_STATUS_TRANSITION",
+        409,
+        "Only rejected receipts can be cloned",
+      );
     }
     return this.create(tenantId, userId, {
       warehouseId: src.warehouseId,
@@ -294,14 +383,18 @@ export class StockReceiptService {
   }
 }
 
-export const stockReceiptService = new StockReceiptService(prisma, stockPostingService, listCache);
+export const stockReceiptService = new StockReceiptService(
+  prisma,
+  stockPostingService,
+  listCache,
+);
 
-const UNSUPPORTED_RECEIPT_TYPES = new Set(['transfer_in', 'production_output']);
+const UNSUPPORTED_RECEIPT_TYPES = new Set(["transfer_in", "production_output"]);
 
 function assertSupportedReceiptType(receiptType: string) {
   if (UNSUPPORTED_RECEIPT_TYPES.has(receiptType)) {
     throw new AppError(
-      'VALIDATION_ERROR',
+      "VALIDATION_ERROR",
       400,
       `${receiptType} is not supported until transfer/production modules exist`,
     );
@@ -315,12 +408,9 @@ async function assertTrackedReceiptLines(
 ) {
   for (const line of lines) {
     if (line.batchNo && !line.batchNo.trim()) {
-      throw new AppError(
-        'VALIDATION_ERROR',
-        400,
-        'batchNo cannot be empty',
-        [{ productId: line.productId }],
-      );
+      throw new AppError("VALIDATION_ERROR", 400, "batchNo cannot be empty", [
+        { productId: line.productId },
+      ]);
     }
   }
 }

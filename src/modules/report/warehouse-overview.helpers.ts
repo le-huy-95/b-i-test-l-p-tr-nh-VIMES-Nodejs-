@@ -1,3 +1,10 @@
+/**
+ * HÀM HỖ TRỢ TỔNG QUAN KHO
+ * -------------------------
+ * - Đếm phiếu theo trạng thái (draft, pending_approval, approved...)
+ * - Tính chỉ số tồn kho qua raw SQL (onhand, reserved, giá trị, low-stock, hết hạn)
+ * - Serialize warehouse và gom số lượng theo đơn vị tính
+ */
 import { Prisma, type PrismaClient } from '../../infra/prisma-types';
 import { d } from '../../utils/decimal';
 

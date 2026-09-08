@@ -1,3 +1,10 @@
+/**
+ * HEALTH CHECK ENDPOINT
+ * ---------------------
+ * Kiểm tra tình trạng hệ thống: PostgreSQL và Redis.
+ * Trả 200 nếu DB OK; 503 nếu có thành phần critical lỗi.
+ * Redis degraded (không kết nối) vẫn có thể trả 200 nếu DB healthy.
+ */
 import { Router, Request, Response } from 'express';
 import { prisma } from '../infra/prisma';
 import { getRedis } from '../infra/redis';

@@ -1,21 +1,27 @@
-import type { Prisma, PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { env } from '../../config/env';
-import { AppError } from '../../utils/app-error';
-import { hashPassword } from '../../utils/crypto';
-import { permissionCache } from '../../infra/redis-permission-cache';
-import { inviteMailer } from '../../infra/email-invite-mailer';
-import { listCache as defaultListCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { paginate, paginationSchema } from '../../dto/pagination.dto';
+/**
+ * DỊCH VỤ TENANT (ĐA THUÊ BAO)
+ * ----------------------------
+ * Tạo/sửa tenant, quản lý thành viên, gửi lời mời, gán quyền và phạm vi kho.
+ * Invalidate cache quyền khi membership thay đổi.
+ */
+import type { Prisma, PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { env } from "../../config/env";
+import { AppError } from "../../utils/app-error";
+import { hashPassword } from "../../utils/crypto";
+import { permissionCache } from "../../infra/redis-permission-cache";
+import { inviteMailer } from "../../infra/email-invite-mailer";
+import { listCache as defaultListCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { paginate, paginationSchema } from "../../dto/pagination.dto";
 import {
   logoExtensionForMime,
   objectStorage,
   tenantLogoObjectKey,
-} from '../../infra/minio-storage';
-import type { InviteMailer } from './invite-mailer.port';
-import type { PermissionCache } from './permission-cache';
-import type { ObjectStorage } from './object-storage.port';
+} from "../../infra/minio-storage";
+import type { InviteMailer } from "./invite-mailer.port";
+import type { PermissionCache } from "./permission-cache";
+import type { ObjectStorage } from "./object-storage.port";
 import {
   acceptInviteSchema,
   createInternalUserSchema,
@@ -24,22 +30,29 @@ import {
   inviteSchema,
   platformCreateTenantSchema,
   platformPatchTenantSchema,
-} from '../../dto/tenant.dto';
-import { NOTIFICATION_EVENT_TYPES } from '../../shared/notifications/event-types';
-import { actorLabel, publishTenantNotification } from '../../shared/notifications/publish';
-import { notifyInvitationCreated } from '../../shared/notifications/direct-notify';
+} from "../../dto/tenant.dto";
+import { NOTIFICATION_EVENT_TYPES } from "../../shared/notifications/event-types";
+import {
+  actorLabel,
+  publishTenantNotification,
+} from "../../shared/notifications/publish";
+import { notifyInvitationCreated } from "../../shared/notifications/direct-notify";
 
 function assertVerified(user: {
   emailVerifiedAt: Date | null;
   phoneVerifiedAt: Date | null;
 }) {
   if (!user.emailVerifiedAt && !user.phoneVerifiedAt) {
-    throw new AppError('EMAIL_NOT_VERIFIED', 403, 'Verify email or phone first');
+    throw new AppError(
+      "EMAIL_NOT_VERIFIED",
+      403,
+      "Verify email or phone first",
+    );
   }
 }
 
-const MEMBERS_CACHE_PREFIX = 'list:members';
-const INVITATIONS_CACHE_PREFIX = 'list:invitations';
+const MEMBERS_CACHE_PREFIX = "list:members";
+const INVITATIONS_CACHE_PREFIX = "list:invitations";
 
 const memberUserSelect = {
   id: true,
@@ -89,13 +102,13 @@ function toInvitation(row: InvitationRow, currentTenantId: string) {
     email: row.email,
     role: row.role,
     status: row.declinedAt
-      ? 'declined'
+      ? "declined"
       : row.acceptedAt
-        ? 'accepted'
+        ? "accepted"
         : row.expiresAt.getTime() < Date.now()
-          ? 'expired'
-          : 'pending',
-    direction: row.tenant.id === currentTenantId ? 'outgoing' : 'incoming',
+          ? "expired"
+          : "pending",
+    direction: row.tenant.id === currentTenantId ? "outgoing" : "incoming",
     tenantId: row.tenant.id,
     tenantName: row.tenant.name,
     expiresAt: row.expiresAt,
@@ -116,24 +129,35 @@ export class TenantService {
   private async invalidatePeopleCaches(tenantId: string): Promise<void> {
     await Promise.all([
       this.listCache.invalidatePattern(`${MEMBERS_CACHE_PREFIX}:${tenantId}:`),
-      this.listCache.invalidatePattern(`${INVITATIONS_CACHE_PREFIX}:${tenantId}:`),
+      this.listCache.invalidatePattern(
+        `${INVITATIONS_CACHE_PREFIX}:${tenantId}:`,
+      ),
     ]);
   }
 
-  private async refreshInvitationListCache(tenantId: string, userId: string): Promise<void> {
-    await this.listCache.invalidatePattern(`${INVITATIONS_CACHE_PREFIX}:${tenantId}:${userId}:`);
+  private async refreshInvitationListCache(
+    tenantId: string,
+    userId: string,
+  ): Promise<void> {
+    await this.listCache.invalidatePattern(
+      `${INVITATIONS_CACHE_PREFIX}:${tenantId}:${userId}:`,
+    );
     await this.listInvitations(tenantId, userId);
   }
 
+  /** User tạo tenant mới và trở thành admin — yêu cầu email đã verify */
   async createTenant(userId: string, input: unknown) {
     const data = createTenantSchema.parse(input);
 
     const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
+    if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
     assertVerified(user);
 
-    const exists = await this.db.tenant.findUnique({ where: { code: data.code } });
-    if (exists) throw new AppError('TENANT_CODE_EXISTS', 409, 'Tenant code exists');
+    const exists = await this.db.tenant.findUnique({
+      where: { code: data.code },
+    });
+    if (exists)
+      throw new AppError("TENANT_CODE_EXISTS", 409, "Tenant code exists");
 
     const tenant = await this.db.tenant.create({
       data: {
@@ -142,7 +166,7 @@ export class TenantService {
         userTenants: {
           create: {
             userId,
-            role: 'admin',
+            role: "admin",
           },
         },
       },
@@ -151,6 +175,7 @@ export class TenantService {
     return tenant;
   }
 
+  /** Admin mời thành viên qua email — gửi link/token invite */
   async invite(tenantId: string, inviterId: string, input: unknown) {
     const data = inviteSchema.parse(input);
 
@@ -158,8 +183,8 @@ export class TenantService {
       this.db.tenant.findUnique({ where: { id: tenantId } }),
       this.db.user.findUnique({ where: { id: inviterId } }),
     ]);
-    if (!tenant) throw new AppError('NOT_FOUND', 404, 'Tenant not found');
-    if (!inviter) throw new AppError('NOT_FOUND', 404, 'User not found');
+    if (!tenant) throw new AppError("NOT_FOUND", 404, "Tenant not found");
+    if (!inviter) throw new AppError("NOT_FOUND", 404, "User not found");
 
     const invitation = await this.db.invitation.create({
       data: {
@@ -183,7 +208,7 @@ export class TenantService {
     });
 
     const invitee = await this.db.user.findFirst({
-      where: { email: { equals: data.email, mode: 'insensitive' } },
+      where: { email: { equals: data.email, mode: "insensitive" } },
       select: { id: true },
     });
 
@@ -204,11 +229,12 @@ export class TenantService {
     return { id: invitation.id, email: data.email, role: data.role, acceptUrl };
   }
 
+  /** User chấp nhận lời mời — tạo membership và gán role/kho */
   async acceptInvite(userId: string, input: unknown) {
     const { invitationId } = acceptInviteSchema.parse(input);
 
     const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
+    if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
     assertVerified(user);
 
     const invitation = await this.db.invitation.findUnique({
@@ -220,10 +246,21 @@ export class TenantService {
       invitation.declinedAt ||
       invitation.expiresAt < new Date()
     ) {
-      throw new AppError('INVALID_INVITE', 400, 'Invalid or expired invitation');
+      throw new AppError(
+        "INVALID_INVITE",
+        400,
+        "Invalid or expired invitation",
+      );
     }
-    if (user.email && invitation.email.toLowerCase() !== user.email.toLowerCase()) {
-      throw new AppError('INVITE_EMAIL_MISMATCH', 403, 'Invitation email mismatch');
+    if (
+      user.email &&
+      invitation.email.toLowerCase() !== user.email.toLowerCase()
+    ) {
+      throw new AppError(
+        "INVITE_EMAIL_MISMATCH",
+        403,
+        "Invitation email mismatch",
+      );
     }
 
     await this.db.$transaction([
@@ -251,20 +288,22 @@ export class TenantService {
     await this.invalidatePeopleCaches(invitation.tenantId);
     await this.refreshInvitationListCache(invitation.tenantId, userId);
 
-    const tenant = await this.db.tenant.findUnique({ where: { id: invitation.tenantId } });
+    const tenant = await this.db.tenant.findUnique({
+      where: { id: invitation.tenantId },
+    });
     const accepterName = actorLabel(user);
     await publishTenantNotification({
       eventType: NOTIFICATION_EVENT_TYPES.INVITATION_ACCEPTED,
       tenantId: invitation.tenantId,
       actorUserId: userId,
       actorName: accepterName,
-      source: { type: 'invitation', id: invitation.id },
-      recipientPolicy: { type: 'tenant_roles', roles: ['admin'] },
+      source: { type: "invitation", id: invitation.id },
+      recipientPolicy: { type: "tenant_roles", roles: ["admin"] },
       notification: {
-        title: 'Thành viên mới',
-        body: `${accepterName} đã tham gia ${tenant?.name ?? 'tổ chức'}`,
-        targetType: 'tenant_list',
-        routeName: 'tenant_members',
+        title: "Thành viên mới",
+        body: `${accepterName} đã tham gia ${tenant?.name ?? "tổ chức"}`,
+        targetType: "tenant_list",
+        routeName: "tenant_members",
         routeParams: { tenantId: invitation.tenantId },
         deeplink: `myapp://tenants/${invitation.tenantId}/members`,
       },
@@ -273,11 +312,12 @@ export class TenantService {
     return { tenantId: invitation.tenantId, role: invitation.role };
   }
 
+  /** User từ chối lời mời tenant */
   async declineInvite(userId: string, input: unknown) {
     const { invitationId } = declineInviteSchema.parse(input);
 
     const user = await this.db.user.findUnique({ where: { id: userId } });
-    if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
+    if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
     assertVerified(user);
 
     const invitation = await this.db.invitation.findUnique({
@@ -289,10 +329,21 @@ export class TenantService {
       invitation.declinedAt ||
       invitation.expiresAt < new Date()
     ) {
-      throw new AppError('INVALID_INVITE', 400, 'Invalid or expired invitation');
+      throw new AppError(
+        "INVALID_INVITE",
+        400,
+        "Invalid or expired invitation",
+      );
     }
-    if (user.email && invitation.email.toLowerCase() !== user.email.toLowerCase()) {
-      throw new AppError('INVITE_EMAIL_MISMATCH', 403, 'Invitation email mismatch');
+    if (
+      user.email &&
+      invitation.email.toLowerCase() !== user.email.toLowerCase()
+    ) {
+      throw new AppError(
+        "INVITE_EMAIL_MISMATCH",
+        403,
+        "Invitation email mismatch",
+      );
     }
 
     await this.db.invitation.update({
@@ -303,7 +354,9 @@ export class TenantService {
     await this.invalidatePeopleCaches(invitation.tenantId);
     await this.refreshInvitationListCache(invitation.tenantId, userId);
 
-    const tenant = await this.db.tenant.findUnique({ where: { id: invitation.tenantId } });
+    const tenant = await this.db.tenant.findUnique({
+      where: { id: invitation.tenantId },
+    });
     const declinerName = actorLabel(user);
     const inviter = await this.db.user.findUnique({
       where: { id: invitation.invitedById },
@@ -315,15 +368,18 @@ export class TenantService {
         tenantId: invitation.tenantId,
         actorUserId: userId,
         actorName: declinerName,
-        source: { type: 'invitation', id: invitation.id },
-        recipientPolicy: { type: 'explicit_users', userIds: [inviter.id] },
+        source: { type: "invitation", id: invitation.id },
+        recipientPolicy: { type: "explicit_users", userIds: [inviter.id] },
         notification: {
-          title: 'Lời mời bị từ chối',
-          body: `${declinerName} đã từ chối lời mời vào ${tenant?.name ?? 'tổ chức'}`,
-          targetType: 'tenant_invitation',
+          title: "Lời mời bị từ chối",
+          body: `${declinerName} đã từ chối lời mời vào ${tenant?.name ?? "tổ chức"}`,
+          targetType: "tenant_invitation",
           targetId: invitation.id,
-          routeName: 'tenant_invitation_detail',
-          routeParams: { invitationId: invitation.id, tenantId: invitation.tenantId },
+          routeName: "tenant_invitation_detail",
+          routeParams: {
+            invitationId: invitation.id,
+            tenantId: invitation.tenantId,
+          },
           deeplink: `myapp://tenant-invitations/${invitation.id}`,
         },
       });
@@ -333,129 +389,130 @@ export class TenantService {
   }
 
   async listMembers(tenantId: string, query?: unknown) {
-    const normalizedQuery = query && Object.keys(query as object).length > 0
-      ? paginationSchema.parse(query)
-      : null;
-    const cacheKey = `${MEMBERS_CACHE_PREFIX}:${tenantId}:${normalizedQuery ? JSON.stringify(normalizedQuery) : 'all'}`;
-    const cached = await this.listCache.get<unknown>(cacheKey);
-    if (cached) return cached;
+    const normalizedQuery =
+      query && Object.keys(query as object).length > 0
+        ? paginationSchema.parse(query)
+        : null;
+    const cacheKey = `${MEMBERS_CACHE_PREFIX}:${tenantId}:${normalizedQuery ? JSON.stringify(normalizedQuery) : "all"}`;
+    return this.listCache.getOrSet(cacheKey, async () => {
+      const search = normalizedQuery?.search?.trim();
+      const where: Prisma.UserTenantWhereInput = {
+        tenantId,
+        ...(search
+          ? {
+              OR: [
+                { user: { name: { contains: search, mode: "insensitive" } } },
+                { user: { email: { contains: search, mode: "insensitive" } } },
+                { user: { phone: { contains: search, mode: "insensitive" } } },
+              ],
+            }
+          : {}),
+      };
 
-    const search = normalizedQuery?.search?.trim();
-    const where: Prisma.UserTenantWhereInput = {
-      tenantId,
-      ...(search
-        ? {
-            OR: [
-              { user: { name: { contains: search, mode: 'insensitive' } } },
-              { user: { email: { contains: search, mode: 'insensitive' } } },
-              { user: { phone: { contains: search, mode: 'insensitive' } } },
-            ],
-          }
-        : {}),
-    };
+      if (!normalizedQuery) {
+        const data = await this.db.userTenant.findMany({
+          where,
+          include: { user: { select: memberUserSelect } },
+          orderBy: { createdAt: "desc" },
+        });
+        return data.map(toMember);
+      }
 
-    if (!normalizedQuery) {
-      const data = await this.db.userTenant.findMany({
-        where,
-        include: { user: { select: memberUserSelect } },
-        orderBy: { createdAt: 'desc' },
-      });
-      const result = data.map(toMember);
-      await this.listCache.set(cacheKey, result);
-      return result;
-    }
+      const { page, limit } = normalizedQuery;
+      const [data, total] = await Promise.all([
+        this.db.userTenant.findMany({
+          where,
+          include: { user: { select: memberUserSelect } },
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.db.userTenant.count({ where }),
+      ]);
 
-    const { page, limit } = normalizedQuery;
-    const [data, total] = await Promise.all([
-      this.db.userTenant.findMany({
-        where,
-        include: { user: { select: memberUserSelect } },
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.db.userTenant.count({ where }),
-    ]);
-
-    const result = paginate(data.map(toMember), page, limit, total);
-    await this.listCache.set(cacheKey, result);
-    return result;
+      return paginate(data.map(toMember), page, limit, total);
+    });
   }
 
   async listInvitations(tenantId: string, userId: string, query?: unknown) {
-    const normalizedQuery = query && Object.keys(query as object).length > 0
-      ? paginationSchema.parse(query)
-      : null;
-    const cacheKey = `${INVITATIONS_CACHE_PREFIX}:${tenantId}:${userId}:${normalizedQuery ? JSON.stringify(normalizedQuery) : 'all'}`;
-    const cached = await this.listCache.get<unknown>(cacheKey);
-    if (cached) return cached;
-
-    const user = await this.db.user.findUnique({
-      where: { id: userId },
-      select: { email: true, phone: true },
-    });
-    if (!user) throw new AppError('NOT_FOUND', 404, 'User not found');
-
-    const identifiers = [user.email, user.phone].filter(
-      (value): value is string => !!value,
-    );
-    const search = normalizedQuery?.search?.trim();
-    const or: Prisma.InvitationWhereInput[] = [{ tenantId }];
-    if (identifiers.length > 0) {
-      or.push({ email: { in: identifiers, mode: 'insensitive' } });
-    }
-    if (search) {
-      or.push(
-        { email: { contains: search, mode: 'insensitive' } },
-        {
-          invitedBy: {
-            OR: [
-              { name: { contains: search, mode: 'insensitive' } },
-              { email: { contains: search, mode: 'insensitive' } },
-            ],
-          },
-        },
-        { tenant: { name: { contains: search, mode: 'insensitive' } } },
-      );
-    }
-    const where: Prisma.InvitationWhereInput = {
-      acceptedAt: null,
-      declinedAt: null,
-      OR: or,
-    };
-
-    if (!normalizedQuery) {
-      const data = await this.db.invitation.findMany({
-        where,
-        select: invitationSelect,
-        orderBy: { createdAt: 'desc' },
+    const normalizedQuery =
+      query && Object.keys(query as object).length > 0
+        ? paginationSchema.parse(query)
+        : null;
+    const cacheKey = `${INVITATIONS_CACHE_PREFIX}:${tenantId}:${userId}:${normalizedQuery ? JSON.stringify(normalizedQuery) : "all"}`;
+    return this.listCache.getOrSet(cacheKey, async () => {
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { email: true, phone: true },
       });
-      const result = data.map((row) => toInvitation(row, tenantId));
-      await this.listCache.set(cacheKey, result);
-      return result;
-    }
+      if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
 
-    const { page, limit } = normalizedQuery;
-    const [data, total] = await Promise.all([
-      this.db.invitation.findMany({
-        where,
-        select: invitationSelect,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.db.invitation.count({ where }),
-    ]);
+      const identifiers = [user.email, user.phone].filter(
+        (value): value is string => !!value,
+      );
+      const search = normalizedQuery?.search?.trim();
+      const or: Prisma.InvitationWhereInput[] = [{ tenantId }];
+      if (identifiers.length > 0) {
+        or.push({ email: { in: identifiers, mode: "insensitive" } });
+      }
+      if (search) {
+        or.push(
+          { email: { contains: search, mode: "insensitive" } },
+          {
+            invitedBy: {
+              OR: [
+                { name: { contains: search, mode: "insensitive" } },
+                { email: { contains: search, mode: "insensitive" } },
+              ],
+            },
+          },
+          { tenant: { name: { contains: search, mode: "insensitive" } } },
+        );
+      }
+      const where: Prisma.InvitationWhereInput = {
+        acceptedAt: null,
+        declinedAt: null,
+        OR: or,
+      };
 
-    const result = paginate(data.map((row) => toInvitation(row, tenantId)), page, limit, total);
-    await this.listCache.set(cacheKey, result);
-    return result;
+      if (!normalizedQuery) {
+        const data = await this.db.invitation.findMany({
+          where,
+          select: invitationSelect,
+          orderBy: { createdAt: "desc" },
+        });
+        return data.map((row) => toInvitation(row, tenantId));
+      }
+
+      const { page, limit } = normalizedQuery;
+      const [data, total] = await Promise.all([
+        this.db.invitation.findMany({
+          where,
+          select: invitationSelect,
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.db.invitation.count({ where }),
+      ]);
+
+      return paginate(
+        data.map((row) => toInvitation(row, tenantId)),
+        page,
+        limit,
+        total,
+      );
+    });
   }
 
-  async createInternalUser(tenantId: string, actorUserId: string, input: unknown) {
+  async createInternalUser(
+    tenantId: string,
+    actorUserId: string,
+    input: unknown,
+  ) {
     const data = createInternalUserSchema.parse(input);
     if (!data.email && !data.phone) {
-      throw new AppError('VALIDATION_ERROR', 400, 'Email or phone required');
+      throw new AppError("VALIDATION_ERROR", 400, "Email or phone required");
     }
 
     const passwordHash = await hashPassword(data.password);
@@ -494,14 +551,14 @@ export class TenantService {
       tenantId,
       actorUserId,
       actorName,
-      source: { type: 'user', id: user.id },
-      recipientPolicy: { type: 'tenant_roles', roles: ['admin'] },
+      source: { type: "user", id: user.id },
+      recipientPolicy: { type: "tenant_roles", roles: ["admin"] },
       notification: {
-        title: 'Tài khoản mới được tạo',
-        body: `${actorName} đã tạo tài khoản ${createdUserName} trong ${tenant?.name ?? 'tổ chức'}`,
-        targetType: 'tenant_list',
+        title: "Tài khoản mới được tạo",
+        body: `${actorName} đã tạo tài khoản ${createdUserName} trong ${tenant?.name ?? "tổ chức"}`,
+        targetType: "tenant_list",
         targetId: tenantId,
-        routeName: 'tenant_members',
+        routeName: "tenant_members",
         routeParams: { tenantId },
         deeplink: `myapp://tenants/${tenantId}/members`,
       },
@@ -529,7 +586,7 @@ export class TenantService {
 
   async getCurrentTenant(tenantId: string) {
     const tenant = await this.db.tenant.findUnique({ where: { id: tenantId } });
-    if (!tenant) throw new AppError('NOT_FOUND', 404, 'Tenant not found');
+    if (!tenant) throw new AppError("NOT_FOUND", 404, "Tenant not found");
     return tenant;
   }
 
@@ -539,14 +596,22 @@ export class TenantService {
   ) {
     const extension = logoExtensionForMime(file.mimetype);
     if (!extension) {
-      throw new AppError('INVALID_LOGO_TYPE', 400, 'Logo must be JPEG, PNG, WebP, or GIF');
+      throw new AppError(
+        "INVALID_LOGO_TYPE",
+        400,
+        "Logo must be JPEG, PNG, WebP, or GIF",
+      );
     }
 
     const tenant = await this.db.tenant.findUnique({ where: { id: tenantId } });
-    if (!tenant) throw new AppError('NOT_FOUND', 404, 'Tenant not found');
+    if (!tenant) throw new AppError("NOT_FOUND", 404, "Tenant not found");
 
     const objectKey = tenantLogoObjectKey(tenantId, extension);
-    const logoUrl = await this.storage.uploadObject(objectKey, file.buffer, file.mimetype);
+    const logoUrl = await this.storage.uploadObject(
+      objectKey,
+      file.buffer,
+      file.mimetype,
+    );
 
     const updated = await this.db.tenant.update({
       where: { id: tenantId },
@@ -565,9 +630,9 @@ export class TenantService {
 
   async deleteLogo(tenantId: string) {
     const tenant = await this.db.tenant.findUnique({ where: { id: tenantId } });
-    if (!tenant) throw new AppError('NOT_FOUND', 404, 'Tenant not found');
+    if (!tenant) throw new AppError("NOT_FOUND", 404, "Tenant not found");
     if (!tenant.logoUrl) {
-      throw new AppError('LOGO_NOT_FOUND', 404, 'Tenant has no logo');
+      throw new AppError("LOGO_NOT_FOUND", 404, "Tenant has no logo");
     }
 
     const objectKey = this.storage.objectKeyFromUrl(tenant.logoUrl);
@@ -582,4 +647,9 @@ export class TenantService {
   }
 }
 
-export const tenantService = new TenantService(prisma, permissionCache, inviteMailer, objectStorage);
+export const tenantService = new TenantService(
+  prisma,
+  permissionCache,
+  inviteMailer,
+  objectStorage,
+);

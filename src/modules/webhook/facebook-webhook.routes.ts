@@ -1,3 +1,8 @@
+/**
+ * ROUTES WEBHOOK FACEBOOK (/webhook/facebook)
+ * -------------------------------------------
+ * GET verify challenge, POST nhận payload event từ Meta.
+ */
 import { Router, Request, Response } from 'express';
 import { env } from '../../config/env';
 import { facebookWebhookChallenge } from './facebook-hub';

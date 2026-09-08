@@ -1,3 +1,12 @@
+/**
+ * Middleware phân giải ngữ cảnh tenant (đa tenant) từ header X-Tenant-Id.
+ *
+ * Sau khi user đã auth, middleware này:
+ * - Xác nhận user thuộc tenant và tenant đang active
+ * - Kiểm tra email/phone đã verify
+ * - Load role và danh sách warehouse được phép (có cache Redis)
+ * - Gán req.tenant cho handler và middleware requireRoles phía sau.
+ */
 import { Request, Response, NextFunction } from 'express';
 import type { PrismaClient } from '../infra/prisma-types';
 import { prisma } from '../infra/prisma';
@@ -12,6 +21,11 @@ export class TenantMiddleware {
     private readonly cache: PermissionCache = permissionCache,
   ) {}
 
+  /**
+   * Load quyền user trong tenant: ưu tiên cache Redis, nếu miss thì query DB
+   * (membership, user, tenant, warehouse assignments) rồi set cache.
+   * Ném AppError nếu không đủ điều kiện truy cập tenant.
+   */
   private async loadPermissions(userId: string, tenantId: string): Promise<CachedPermissions> {
     const cached = await this.cache.get(userId, tenantId);
     if (cached) return cached;
@@ -56,6 +70,10 @@ export class TenantMiddleware {
     return payload;
   }
 
+  /**
+   * Handler Express: đọc X-Tenant-Id, load permissions, gán req.tenant.
+   * Yêu cầu req.user từ auth middleware trước đó.
+   */
   resolve = async (req: Request, _res: Response, next: NextFunction) => {
     try {
       if (!req.user) {
@@ -82,6 +100,10 @@ export class TenantMiddleware {
 export const tenantMiddlewareInstance = new TenantMiddleware(prisma, permissionCache);
 export const tenantMiddleware = tenantMiddlewareInstance.resolve;
 
+/**
+ * Factory middleware: chỉ cho phép các role tenant được liệt kê.
+ * Ví dụ: requireRoles('admin', 'manager') trên route quản lý kho.
+ */
 export function requireRoles(...roles: TenantRole[]) {
   return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.tenant) {

@@ -1,10 +1,16 @@
-import type { Prisma, PrismaClient } from '../../infra/prisma-types';
-import { Prisma as PrismaNs } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { organizationOverviewQuerySchema } from '../../dto/report.dto';
-import { listCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { d } from '../../utils/decimal';
+/**
+ * DỊCH VỤ TỔNG QUAN TỔ CHỨC
+ * --------------------------
+ * Dashboard cấp tenant: tổng tồn, phiếu theo trạng thái, biểu đồ biến động,
+ * top sản phẩm. Phân quyền: admin/accountant xem toàn bộ, role khác chỉ document của mình.
+ */
+import type { Prisma, PrismaClient } from "../../infra/prisma-types";
+import { Prisma as PrismaNs } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { organizationOverviewQuerySchema } from "../../dto/report.dto";
+import { listCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { d } from "../../utils/decimal";
 import {
   aggregateQtyByUnit,
   computeOrganizationInventoryMetrics,
@@ -15,7 +21,7 @@ import {
   type DocStatusKey,
   type QtyByUnit,
   type WarehouseInventoryMetrics,
-} from './warehouse-overview.helpers';
+} from "./warehouse-overview.helpers";
 import {
   buildDailyMovementSeries,
   buildDateRangeFilter,
@@ -26,9 +32,10 @@ import {
   type DailyMovementRow,
   type OrganizationOverviewContext,
   type TopProductRow,
-} from './organization-overview.helpers';
+} from "./organization-overview.helpers";
 
-export const CACHE_PREFIX_ORGANIZATION_OVERVIEW = 'report:organization-overview';
+export const CACHE_PREFIX_ORGANIZATION_OVERVIEW =
+  "report:organization-overview";
 
 type ReceiptWhere = Prisma.StockReceiptWhereInput;
 type IssueWhere = Prisma.StockIssueWhereInput;
@@ -42,8 +49,8 @@ export class OrganizationOverviewService {
   buildContext(
     tenantId: string,
     userId: string,
-    role: OrganizationOverviewContext['role'],
-    warehouseIds: OrganizationOverviewContext['warehouseIds'],
+    role: OrganizationOverviewContext["role"],
+    warehouseIds: OrganizationOverviewContext["warehouseIds"],
   ): OrganizationOverviewContext {
     return {
       tenantId,
@@ -54,6 +61,7 @@ export class OrganizationOverviewService {
     };
   }
 
+  /** Dashboard tổng quan toàn tổ chức — cache theo ctx + bộ lọc ngày */
   async getOverview(ctx: OrganizationOverviewContext, query: unknown) {
     const parsed = organizationOverviewQuerySchema.parse(query);
     const fromDate = parsed.from ? new Date(parsed.from) : undefined;
@@ -63,15 +71,15 @@ export class OrganizationOverviewService {
       CACHE_PREFIX_ORGANIZATION_OVERVIEW,
       ctx.tenantId,
       ctx.visibilityScope,
-      ctx.visibilityScope === 'own_documents' ? ctx.userId : 'all',
+      ctx.visibilityScope === "own_documents" ? ctx.userId : "all",
       ctx.role,
-      Array.isArray(ctx.warehouseIds) ? ctx.warehouseIds.join(',') : 'all',
-      parsed.from ?? '',
-      parsed.to ?? '',
+      Array.isArray(ctx.warehouseIds) ? ctx.warehouseIds.join(",") : "all",
+      parsed.from ?? "",
+      parsed.to ?? "",
       parsed.expiryDays,
       parsed.topLimit,
       parsed.recentLimit,
-    ].join(':');
+    ].join(":");
 
     const cached = await this.cache.get<unknown>(cacheKey);
     if (cached) return cached;
@@ -79,7 +87,7 @@ export class OrganizationOverviewService {
     const receiptWhere = this.buildReceiptWhere(ctx, fromDate, toDate);
     const issueWhere = this.buildIssueWhere(ctx, fromDate, toDate);
     const openingWhere = this.buildOpeningWhere(ctx, fromDate, toDate);
-    const isOrganization = ctx.visibilityScope === 'organization';
+    const isOrganization = ctx.visibilityScope === "organization";
     const warehousesPromise = this.loadWarehouses(ctx);
     const movementPromise = this.loadCompletedMovement(ctx, fromDate, toDate);
 
@@ -99,24 +107,24 @@ export class OrganizationOverviewService {
       isOrganization
         ? Promise.resolve(null)
         : this.db.stockReceipt.groupBy({
-            by: ['status'],
+            by: ["status"],
             where: receiptWhere,
             _count: { _all: true },
           }),
       isOrganization
         ? Promise.resolve(null)
         : this.db.stockIssue.groupBy({
-            by: ['status'],
+            by: ["status"],
             where: issueWhere,
             _count: { _all: true },
           }),
       this.db.stockOpeningBalance.groupBy({
-        by: ['status'],
+        by: ["status"],
         where: openingWhere,
         _count: { _all: true },
       }),
       this.db.stockReceipt.findMany({
-        where: { ...receiptWhere, status: 'pending_approval' },
+        where: { ...receiptWhere, status: "pending_approval" },
         select: {
           id: true,
           code: true,
@@ -129,11 +137,11 @@ export class OrganizationOverviewService {
           supplier: { select: { id: true, code: true, name: true } },
           createdById: true,
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: "asc" },
         take: parsed.recentLimit,
       }),
       this.db.stockIssue.findMany({
-        where: { ...issueWhere, status: 'pending_approval' },
+        where: { ...issueWhere, status: "pending_approval" },
         select: {
           id: true,
           code: true,
@@ -145,7 +153,7 @@ export class OrganizationOverviewService {
           customer: { select: { id: true, code: true, name: true } },
           createdById: true,
         },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { createdAt: "asc" },
         take: parsed.recentLimit,
       }),
       movementPromise,
@@ -154,7 +162,13 @@ export class OrganizationOverviewService {
         ? this.loadInventorySummary(ctx, warehousesPromise, parsed.expiryDays)
         : Promise.resolve(null),
       isOrganization
-        ? this.loadWarehousesBreakdown(ctx, warehousesPromise, fromDate, toDate, movementPromise)
+        ? this.loadWarehousesBreakdown(
+            ctx,
+            warehousesPromise,
+            fromDate,
+            toDate,
+            movementPromise,
+          )
         : Promise.resolve({ items: [], receiptGroups: [], issueGroups: [] }),
     ]);
     const ownMovement = this.summarizeOwnQty(movement.qtyRows);
@@ -162,35 +176,45 @@ export class OrganizationOverviewService {
 
     const receiptStatusRows = isOrganization
       ? sumStatusCountRows(orgBreakdown.receiptGroups)
-      : ownReceiptStatusRows ?? [];
+      : (ownReceiptStatusRows ?? []);
     const issueStatusRows = isOrganization
       ? sumStatusCountRows(orgBreakdown.issueGroups)
-      : ownIssueStatusRows ?? [];
+      : (ownIssueStatusRows ?? []);
     const { topImportedProducts, topExportedProducts } = topProducts;
     const warehousesBreakdown = orgBreakdown.items;
 
     const totalImportedQty =
-      ctx.visibilityScope === 'organization'
+      ctx.visibilityScope === "organization"
         ? warehousesBreakdown
-            .reduce((sum, row) => sum.plus(row.productMovement.totalImportedQty), d(0))
+            .reduce(
+              (sum, row) => sum.plus(row.productMovement.totalImportedQty),
+              d(0),
+            )
             .toFixed(4)
         : ownMovement.totalImportedQty;
     const totalExportedQty =
-      ctx.visibilityScope === 'organization'
+      ctx.visibilityScope === "organization"
         ? warehousesBreakdown
-            .reduce((sum, row) => sum.plus(row.productMovement.totalExportedQty), d(0))
+            .reduce(
+              (sum, row) => sum.plus(row.productMovement.totalExportedQty),
+              d(0),
+            )
             .toFixed(4)
         : ownMovement.totalExportedQty;
     const importedQtyByUnit =
-      ctx.visibilityScope === 'organization'
+      ctx.visibilityScope === "organization"
         ? aggregateQtyByUnit(
-            warehousesBreakdown.flatMap((row) => row.productMovement.importedQtyByUnit),
+            warehousesBreakdown.flatMap(
+              (row) => row.productMovement.importedQtyByUnit,
+            ),
           )
         : ownMovement.importedQtyByUnit;
     const exportedQtyByUnit =
-      ctx.visibilityScope === 'organization'
+      ctx.visibilityScope === "organization"
         ? aggregateQtyByUnit(
-            warehousesBreakdown.flatMap((row) => row.productMovement.exportedQtyByUnit),
+            warehousesBreakdown.flatMap(
+              (row) => row.productMovement.exportedQtyByUnit,
+            ),
           )
         : ownMovement.exportedQtyByUnit;
 
@@ -305,12 +329,12 @@ export class OrganizationOverviewService {
     const where = {
       tenantId: ctx.tenantId,
       isActive: true,
-      ...(ctx.warehouseIds === 'all' ? {} : { id: { in: ctx.warehouseIds } }),
+      ...(ctx.warehouseIds === "all" ? {} : { id: { in: ctx.warehouseIds } }),
     };
     return this.db.warehouse.findMany({
       where,
       select: { id: true, code: true, name: true },
-      orderBy: { code: 'asc' },
+      orderBy: { code: "asc" },
     });
   }
 
@@ -323,29 +347,40 @@ export class OrganizationOverviewService {
       PrismaNs.sql`r.tenant_id = ${ctx.tenantId}`,
       PrismaNs.sql`r.status = 'completed'`,
     ];
-    if (ctx.warehouseIds !== 'all') {
-      conditions.push(PrismaNs.sql`r.warehouse_id IN (${PrismaNs.join(ctx.warehouseIds)})`);
+    if (ctx.warehouseIds !== "all") {
+      conditions.push(
+        PrismaNs.sql`r.warehouse_id IN (${PrismaNs.join(ctx.warehouseIds)})`,
+      );
     }
-    if (ctx.visibilityScope === 'own_documents') {
+    if (ctx.visibilityScope === "own_documents") {
       conditions.push(
         PrismaNs.sql`(r.created_by_id = ${ctx.userId} OR r.approved_by_id = ${ctx.userId})`,
       );
     }
     if (from) conditions.push(PrismaNs.sql`r.completed_at >= ${from}`);
     if (to) conditions.push(PrismaNs.sql`r.completed_at <= ${to}`);
-    return PrismaNs.join(conditions, ' AND ');
+    return PrismaNs.join(conditions, " AND ");
   }
 
   private summarizeOwnQty(
-    rows: Array<{ kind: 'receipt' | 'issue'; warehouseId: string; baseUnitName: string; qty: string }>,
+    rows: Array<{
+      kind: "receipt" | "issue";
+      warehouseId: string;
+      baseUnitName: string;
+      qty: string;
+    }>,
   ): {
     totalImportedQty: string;
     totalExportedQty: string;
     importedQtyByUnit: QtyByUnit[];
     exportedQtyByUnit: QtyByUnit[];
   } {
-    const importedQtyByUnit = aggregateQtyByUnit(rows.filter((row) => row.kind === 'receipt'));
-    const exportedQtyByUnit = aggregateQtyByUnit(rows.filter((row) => row.kind === 'issue'));
+    const importedQtyByUnit = aggregateQtyByUnit(
+      rows.filter((row) => row.kind === "receipt"),
+    );
+    const exportedQtyByUnit = aggregateQtyByUnit(
+      rows.filter((row) => row.kind === "issue"),
+    );
     return {
       totalImportedQty: importedQtyByUnit
         .reduce((sum, row) => sum.plus(row.qty), d(0))
@@ -361,7 +396,7 @@ export class OrganizationOverviewService {
   private emptyMovement(from?: Date, to?: Date) {
     return {
       qtyRows: [] as Array<{
-        kind: 'receipt' | 'issue';
+        kind: "receipt" | "issue";
         warehouseId: string;
         baseUnitName: string;
         qty: string;
@@ -378,10 +413,15 @@ export class OrganizationOverviewService {
     from?: Date,
     to?: Date,
   ): Promise<{
-    qtyRows: Array<{ kind: 'receipt' | 'issue'; warehouseId: string; baseUnitName: string; qty: string }>;
+    qtyRows: Array<{
+      kind: "receipt" | "issue";
+      warehouseId: string;
+      baseUnitName: string;
+      qty: string;
+    }>;
     dailyMovement: DailyMovementRow[];
   }> {
-    if (ctx.warehouseIds !== 'all' && ctx.warehouseIds.length === 0) {
+    if (ctx.warehouseIds !== "all" && ctx.warehouseIds.length === 0) {
       return this.emptyMovement(from, to);
     }
 
@@ -389,8 +429,8 @@ export class OrganizationOverviewService {
     const includeDaily = Boolean(from && to);
     const rows = await this.db.$queryRaw<
       Array<{
-        facet: 'unit' | 'day';
-        kind: 'receipt' | 'issue';
+        facet: "unit" | "day";
+        kind: "receipt" | "issue";
         warehouseId: string | null;
         baseUnitName: string | null;
         day: Date | null;
@@ -457,11 +497,11 @@ export class OrganizationOverviewService {
     );
 
     const qtyRows = rows
-      .filter((row) => row.facet === 'unit' && row.warehouseId)
+      .filter((row) => row.facet === "unit" && row.warehouseId)
       .map((row) => ({
         kind: row.kind,
         warehouseId: row.warehouseId as string,
-        baseUnitName: row.baseUnitName ?? '',
+        baseUnitName: row.baseUnitName ?? "",
         qty: d(row.qty).toFixed(4),
       }));
 
@@ -472,19 +512,24 @@ export class OrganizationOverviewService {
     const importedByDay = new Map<string, string>();
     const exportedByDay = new Map<string, string>();
     for (const row of rows) {
-      if (row.facet !== 'day' || !row.day) continue;
+      if (row.facet !== "day" || !row.day) continue;
       const key =
         row.day instanceof Date
           ? row.day.toISOString().slice(0, 10)
           : String(row.day).slice(0, 10);
       const qty = d(row.qty).toFixed(4);
-      if (row.kind === 'receipt') importedByDay.set(key, qty);
+      if (row.kind === "receipt") importedByDay.set(key, qty);
       else exportedByDay.set(key, qty);
     }
 
     return {
       qtyRows,
-      dailyMovement: buildDailyMovementSeries(from, to, importedByDay, exportedByDay),
+      dailyMovement: buildDailyMovementSeries(
+        from,
+        to,
+        importedByDay,
+        exportedByDay,
+      ),
     };
   }
 
@@ -493,8 +538,11 @@ export class OrganizationOverviewService {
     from: Date | undefined,
     to: Date | undefined,
     topLimit: number,
-  ): Promise<{ topImportedProducts: TopProductRow[]; topExportedProducts: TopProductRow[] }> {
-    if (ctx.warehouseIds !== 'all' && ctx.warehouseIds.length === 0) {
+  ): Promise<{
+    topImportedProducts: TopProductRow[];
+    topExportedProducts: TopProductRow[];
+  }> {
+    if (ctx.warehouseIds !== "all" && ctx.warehouseIds.length === 0) {
       return { topImportedProducts: [], topExportedProducts: [] };
     }
 
@@ -507,7 +555,7 @@ export class OrganizationOverviewService {
         baseUnitName: string;
         totalQty: string;
         documentCount: number;
-        kind: 'imported' | 'exported';
+        kind: "imported" | "exported";
       }>
     >(PrismaNs.sql`
       -- overview-top-products
@@ -550,8 +598,12 @@ export class OrganizationOverviewService {
     });
 
     return {
-      topImportedProducts: rows.filter((row) => row.kind === 'imported').map(mapRow),
-      topExportedProducts: rows.filter((row) => row.kind === 'exported').map(mapRow),
+      topImportedProducts: rows
+        .filter((row) => row.kind === "imported")
+        .map(mapRow),
+      topExportedProducts: rows
+        .filter((row) => row.kind === "exported")
+        .map(mapRow),
     };
   }
 
@@ -562,7 +614,7 @@ export class OrganizationOverviewService {
   ) {
     const warehouses = await warehousesPromise;
     const warehouseIds = warehouses.map((warehouse) => warehouse.id);
-    const cacheKey = `${CACHE_PREFIX_ORGANIZATION_OVERVIEW}:${ctx.tenantId}:inventory:${warehouseIds.join(',')}:${expiryDays}`;
+    const cacheKey = `${CACHE_PREFIX_ORGANIZATION_OVERVIEW}:${ctx.tenantId}:inventory:${warehouseIds.join(",")}:${expiryDays}`;
     const cached = await this.cache.get<WarehouseInventoryMetrics>(cacheKey);
     if (cached) return cached;
     const metrics = await computeOrganizationInventoryMetrics(
@@ -577,22 +629,29 @@ export class OrganizationOverviewService {
 
   private async loadWarehousesBreakdown(
     ctx: OrganizationOverviewContext,
-    warehousesPromise: Promise<Array<{ id: string; code: string; name: string }>>,
+    warehousesPromise: Promise<
+      Array<{ id: string; code: string; name: string }>
+    >,
     from: Date | undefined,
     to: Date | undefined,
     movementPromise: Promise<{
-      qtyRows: Array<{ kind: 'receipt' | 'issue'; warehouseId: string; baseUnitName: string; qty: string }>;
+      qtyRows: Array<{
+        kind: "receipt" | "issue";
+        warehouseId: string;
+        baseUnitName: string;
+        qty: string;
+      }>;
     }>,
   ) {
     const warehouses = await warehousesPromise;
     const [receiptGroups, issueGroups, movement] = await Promise.all([
       this.db.stockReceipt.groupBy({
-        by: ['warehouseId', 'status'],
+        by: ["warehouseId", "status"],
         where: this.buildReceiptWhere(ctx, from, to),
         _count: { _all: true },
       }),
       this.db.stockIssue.groupBy({
-        by: ['warehouseId', 'status'],
+        by: ["warehouseId", "status"],
         where: this.buildIssueWhere(ctx, from, to),
         _count: { _all: true },
       }),
@@ -610,10 +669,11 @@ export class OrganizationOverviewService {
       status: DocStatusKey;
       _count: { _all: number };
     }>;
-    const receiptCountsByWarehouse = groupDocCountsByWarehouse(typedReceiptGroups);
+    const receiptCountsByWarehouse =
+      groupDocCountsByWarehouse(typedReceiptGroups);
     const issueCountsByWarehouse = groupDocCountsByWarehouse(typedIssueGroups);
-    const importedRows = qtyRows.filter((row) => row.kind === 'receipt');
-    const exportedRows = qtyRows.filter((row) => row.kind === 'issue');
+    const importedRows = qtyRows.filter((row) => row.kind === "receipt");
+    const exportedRows = qtyRows.filter((row) => row.kind === "issue");
     const importedByWarehouse = sumQtyByWarehouseId(importedRows);
     const exportedByWarehouse = sumQtyByWarehouseId(exportedRows);
 
@@ -621,13 +681,15 @@ export class OrganizationOverviewService {
       receiptGroups: typedReceiptGroups,
       issueGroups: typedIssueGroups,
       items: warehouses.map((warehouse) => {
-        const receiptCounts = receiptCountsByWarehouse.get(warehouse.id) ?? rowsToStatusCounts([]);
-        const issueCounts = issueCountsByWarehouse.get(warehouse.id) ?? rowsToStatusCounts([]);
+        const receiptCounts =
+          receiptCountsByWarehouse.get(warehouse.id) ?? rowsToStatusCounts([]);
+        const issueCounts =
+          issueCountsByWarehouse.get(warehouse.id) ?? rowsToStatusCounts([]);
         return {
           warehouse,
           productMovement: {
-            totalImportedQty: importedByWarehouse.get(warehouse.id) ?? '0.0000',
-            totalExportedQty: exportedByWarehouse.get(warehouse.id) ?? '0.0000',
+            totalImportedQty: importedByWarehouse.get(warehouse.id) ?? "0.0000",
+            totalExportedQty: exportedByWarehouse.get(warehouse.id) ?? "0.0000",
             importedQtyByUnit: aggregateQtyByUnit(
               importedRows.filter((row) => row.warehouseId === warehouse.id),
             ),
@@ -653,4 +715,7 @@ export class OrganizationOverviewService {
   }
 }
 
-export const organizationOverviewService = new OrganizationOverviewService(prisma, listCache);
+export const organizationOverviewService = new OrganizationOverviewService(
+  prisma,
+  listCache,
+);

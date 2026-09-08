@@ -1,3 +1,9 @@
+/**
+ * DỊCH VỤ TOKEN (JWT)
+ * -------------------
+ * Phát hành access/refresh token, làm mới phiên, đăng xuất (revoke refresh token).
+ * Refresh token lưu hash trong DB, access token stateless ký bằng JWT.
+ */
 import type { PrismaClient } from '../../infra/prisma-types';
 import { prisma } from '../../infra/prisma';
 import { AppError } from '../../utils/app-error';

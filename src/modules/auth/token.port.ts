@@ -1,3 +1,8 @@
+/**
+ * PORT TOKEN
+ * ----------
+ * Interface phát hành JWT access/refresh, refresh phiên, logout.
+ */
 export interface TokenIssuer {
   issueTokens(
     userId: string,

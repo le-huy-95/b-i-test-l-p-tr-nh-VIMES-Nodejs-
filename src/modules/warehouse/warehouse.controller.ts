@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER KHO
+ * --------------
+ * HTTP handler list/create/update/delete warehouse.
+ */
 import { Request, Response } from 'express';
 import { warehouseService } from './warehouse.service';
 

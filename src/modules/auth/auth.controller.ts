@@ -1,3 +1,9 @@
+/**
+ * CONTROLLER XÁC THỰC
+ * -------------------
+ * Nhận HTTP request, gọi authService, trả JSON chuẩn { success, data }.
+ * Không chứa logic nghiệp vụ — chỉ điều phối request/response.
+ */
 import { Request, Response } from 'express';
 import { authService } from './auth.service';
 

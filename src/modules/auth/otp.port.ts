@@ -1,3 +1,8 @@
+/**
+ * PORT OTP
+ * --------
+ * Interface cho luồng OTP: phát hành, xác minh, gửi lại, reset mật khẩu.
+ */
 export interface OtpIssuer {
   issueOtp(
     userId: string,

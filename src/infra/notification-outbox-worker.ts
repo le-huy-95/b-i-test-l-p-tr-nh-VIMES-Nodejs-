@@ -1,3 +1,10 @@
+/**
+ * Worker polling bảng notification_outbox và publish sự kiện lên Kafka.
+ *
+ * Dùng raw SQL UPDATE ... FOR UPDATE SKIP LOCKED để claim batch an toàn
+ * đa instance, sau đó gọi kafkaProducer và cập nhật trạng thái qua
+ * notification-outbox helpers. Chạy theo interval từ env OUTBOX_POLL_INTERVAL_MS.
+ */
 import { prisma } from './prisma';
 import { env } from '../config/env';
 import { kafkaProducer } from './kafka-producer';
@@ -8,20 +15,30 @@ import {
   markNotificationOutboxPublished,
 } from './notification-outbox';
 
+/** Hàng outbox sau khi claim — chỉ cần id và payload JSON */
 type OutboxRow = {
   id: string;
   payload: Prisma.JsonValue;
 };
 
+/**
+ * Type guard đơn giản: payload có eventId và tenantId.
+ */
 function isNotificationEvent(value: unknown): value is TenantNotificationEvent {
   return typeof value === 'object' && value !== null && 'eventId' in value && 'tenantId' in value;
 }
 
+/**
+ * Background worker: interval poll, claim batch, publish Kafka, cập nhật outbox.
+ */
 export class NotificationOutboxWorker {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private stopped = false;
 
+  /**
+   * Bắt đầu worker: flush ngay một lần rồi setInterval (unref để không giữ process).
+   */
   async start(): Promise<void> {
     if (this.timer) return;
     await this.flushOnce();
@@ -31,6 +48,9 @@ export class NotificationOutboxWorker {
     this.timer.unref();
   }
 
+  /**
+   * Dừng polling; flush đang chạy sẽ kết thúc tự nhiên.
+   */
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) {
@@ -39,6 +59,9 @@ export class NotificationOutboxWorker {
     }
   }
 
+  /**
+   * Một vòng xử lý: claim batch nếu không bận và chưa stop.
+   */
   async flushOnce(): Promise<void> {
     if (this.stopped || this.running) return;
     this.running = true;
@@ -53,6 +76,9 @@ export class NotificationOutboxWorker {
     }
   }
 
+  /**
+   * Claim tối đa OUTBOX_BATCH_SIZE hàng pending/failed sẵn sàng (SKIP LOCKED).
+   */
   private async claimBatch(): Promise<OutboxRow[]> {
     const now = new Date();
 
@@ -73,6 +99,9 @@ export class NotificationOutboxWorker {
     return rows;
   }
 
+  /**
+   * Publish từng event trong batch; invalid payload hoặc lỗi Kafka → mark failed.
+   */
   private async processBatch(rows: OutboxRow[]): Promise<void> {
     for (const row of rows) {
       try {
@@ -91,4 +120,5 @@ export class NotificationOutboxWorker {
   }
 }
 
+/** Worker singleton khởi động cùng app */
 export const notificationOutboxWorker = new NotificationOutboxWorker();

@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER PHIẾU XUẤT
+ * ---------------------
+ * HTTP handler stock issue lifecycle.
+ */
 import { Request, Response } from 'express';
 import { stockIssueService } from './stock-issue.service';
 import { rejectDocumentSchema } from '../../dto/stock-receipt.dto';

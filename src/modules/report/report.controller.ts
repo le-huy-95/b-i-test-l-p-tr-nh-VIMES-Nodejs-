@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER BÁO CÁO
+ * ------------------
+ * Nhận HTTP request, lấy tenantId từ middleware, gọi service tương ứng, trả JSON { success, data }.
+ */
 import { Request, Response } from 'express';
 import { reportService } from './report.service';
 import { warehouseOverviewService } from './warehouse-overview.service';

@@ -1,3 +1,9 @@
+/**
+ * DỊCH VỤ THIẾT BỊ NGƯỜI DÙNG
+ * ---------------------------
+ * Đăng ký/cập nhật thiết bị mobile (push notification, theo dõi phiên).
+ * Upsert theo deviceId — mỗi thiết bị chỉ thuộc 1 user tại một thời điểm.
+ */
 import type { Prisma, PrismaClient } from '../../infra/prisma-types';
 import { prisma } from '../../infra/prisma';
 import { deviceSchema, registerDeviceSchema } from '../../dto/auth.dto';

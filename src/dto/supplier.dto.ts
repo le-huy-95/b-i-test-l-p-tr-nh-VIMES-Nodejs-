@@ -1,5 +1,11 @@
+/**
+ * Schema Zod và DTO cho nhà cung cấp (supplier).
+ *
+ * Validate mã, tên, mã số thuế và thông tin liên hệ khi tạo/cập nhật NCC.
+ */
 import { z } from 'zod';
 
+/* Schema đầy đủ cho tạo nhà cung cấp */
 export const supplierSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),

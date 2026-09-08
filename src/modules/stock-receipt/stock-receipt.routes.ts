@@ -1,3 +1,8 @@
+/**
+ * ROUTES PHIẾU NHẬP (/api/v1/stock-receipts)
+ * ------------------------------------------
+ * CRUD phiếu nhập, submit duyệt, hủy; có idempotency cho POST.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

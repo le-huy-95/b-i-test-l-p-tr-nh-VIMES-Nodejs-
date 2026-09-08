@@ -1,3 +1,8 @@
+/**
+ * HÀM HỖ TRỢ DÒNG PHIẾU KHO
+ * -------------------------
+ * Validate và map dòng chi tiết phiếu nhập/xuất/tồn đầu kỳ.
+ */
 import type { Prisma, PrismaClient } from '../../infra/prisma-types';
 import { AppError } from '../../utils/app-error';
 import { d, toDecimalString } from '../../utils/decimal';

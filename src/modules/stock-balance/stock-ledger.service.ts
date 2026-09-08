@@ -1,3 +1,8 @@
+/**
+ * DỊCH VỤ SỔ CÁI KHO (STOCK LEDGER)
+ * ---------------------------------
+ * Ghi nhận mọi biến động tồn (nhập/xuất/điều chỉnh) — audit trail bất biến.
+ */
 import { Prisma } from '../../infra/prisma-types';
 import type { StockLedgerEntry, StockLedgerWriter } from './stock-ledger.port';
 

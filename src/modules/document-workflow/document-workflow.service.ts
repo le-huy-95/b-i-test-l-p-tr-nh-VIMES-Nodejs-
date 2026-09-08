@@ -1,7 +1,13 @@
-import type { PrismaClient, Prisma } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import type { DocumentAdapterPort } from './document-adapter.port';
+/**
+ * DỊCH VỤ WORKFLOW PHÊ DUYỆT CHỨNG TỪ
+ * ------------------------------------
+ * Khởi tạo luồng duyệt, approve/reject từng bước, delegate, hoàn tất.
+ * Liên kết với stock-document-adapter để đổi trạng thái phiếu kho.
+ */
+import type { PrismaClient, Prisma } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import type { DocumentAdapterPort } from "./document-adapter.port";
 import type {
   DocumentType,
   WorkflowAction,
@@ -12,30 +18,33 @@ import type {
   WorkflowDocumentStatus,
   WorkflowStepStatus,
   WorkflowStepTemplate,
-} from './document-workflow.port';
-import { getWorkflowTemplate } from './workflow-templates';
+} from "./document-workflow.port";
+import { getWorkflowTemplate } from "./workflow-templates";
 import {
   assertActionAllowed,
   assertCanAssignStep,
   assertStepPending,
   computeDocumentStatus,
-} from './workflow-state-machine';
-import { cacheInvalidationService } from '../../infra/cache-invalidation';
+} from "./workflow-state-machine";
+import { cacheInvalidationService } from "../../infra/cache-invalidation";
 
 function assertActorAssignedToStep(
   step: { assignedApproverId?: string | null },
   actor: WorkflowActor,
 ): void {
   if (step.assignedApproverId && step.assignedApproverId !== actor.userId) {
-    throw new AppError('STEP_NOT_ASSIGNED', 403, 'You are not assigned to approve this step');
+    throw new AppError(
+      "STEP_NOT_ASSIGNED",
+      403,
+      "You are not assigned to approve this step",
+    );
   }
 }
 
 export class DocumentWorkflowService {
-  constructor(
-    private readonly db: PrismaClient = prisma,
-  ) {}
+  constructor(private readonly db: PrismaClient = prisma) {}
 
+  /** Khởi tạo luồng duyệt mới từ template — tạo các bước và gán người duyệt */
   async initWorkflow(
     tenantId: string,
     documentType: DocumentType,
@@ -48,19 +57,34 @@ export class DocumentWorkflowService {
       where: { tenantId, documentType, documentId },
     });
     if (existing) {
-      throw new AppError('WORKFLOW_EXISTS', 409, 'Workflow already exists for this document');
+      throw new AppError(
+        "WORKFLOW_EXISTS",
+        409,
+        "Workflow already exists for this document",
+      );
     }
 
-    const docInfo = await adapter.getDocumentInfo(tenantId, documentId, this.db);
+    const docInfo = await adapter.getDocumentInfo(
+      tenantId,
+      documentId,
+      this.db,
+    );
     if (!docInfo) {
-      throw new AppError('DOCUMENT_NOT_FOUND', 404, 'Document not found');
+      throw new AppError("DOCUMENT_NOT_FOUND", 404, "Document not found");
     }
 
     const template = getWorkflowTemplate(documentType);
     const now = new Date();
 
-    if (template.steps.length > 1 && assignedApproverIds.length < template.steps.length - 1) {
-      throw new AppError('VALIDATION_ERROR', 400, 'assignedApproverIds must include an approver for each workflow step after creator');
+    if (
+      template.steps.length > 1 &&
+      assignedApproverIds.length < template.steps.length - 1
+    ) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        400,
+        "assignedApproverIds must include an approver for each workflow step after creator",
+      );
     }
 
     const workflow = await this.db.documentWorkflow.create({
@@ -68,9 +92,9 @@ export class DocumentWorkflowService {
         tenantId,
         documentType,
         documentId,
-        status: 'draft',
+        status: "draft",
         currentStepCode: template.steps[0]?.stepCode ?? null,
-        currentStepStatus: template.steps[0] ? 'pending' : null,
+        currentStepStatus: template.steps[0] ? "pending" : null,
         currentStepUpdatedAt: now,
         lastActionById: actor.userId,
         lastActionAt: now,
@@ -85,22 +109,26 @@ export class DocumentWorkflowService {
       stepCode: string;
       stepName: string;
       sequence: number;
-      requiredRole: WorkflowStepTemplate['requiredRole'] | null;
+      requiredRole: WorkflowStepTemplate["requiredRole"] | null;
       requiredSignerId: string | null;
       assignedApproverId: string | null;
       status: WorkflowStepStatus;
     }> = [];
     for (const step of template.steps) {
-      const stepAssignee = step.stepCode === 'creator' ? null : assignedApproverIds[step.sequence - 2] ?? null;
-      const { requiredSignerId, assignedApproverId } = await adapter.resolveInitialSigner(
-        tenantId,
-        documentId,
-        step.stepCode,
-        step.requiredRole ?? null,
-        actor,
-        this.db,
-        stepAssignee,
-      );
+      const stepAssignee =
+        step.stepCode === "creator"
+          ? null
+          : (assignedApproverIds[step.sequence - 2] ?? null);
+      const { requiredSignerId, assignedApproverId } =
+        await adapter.resolveInitialSigner(
+          tenantId,
+          documentId,
+          step.stepCode,
+          step.requiredRole ?? null,
+          actor,
+          this.db,
+          stepAssignee,
+        );
 
       stepsData.push({
         tenantId,
@@ -113,7 +141,7 @@ export class DocumentWorkflowService {
         requiredRole: step.requiredRole ?? null,
         requiredSignerId,
         assignedApproverId,
-        status: 'pending' as WorkflowStepStatus,
+        status: "pending" as WorkflowStepStatus,
       });
     }
 
@@ -127,14 +155,15 @@ export class DocumentWorkflowService {
       documentId,
       null,
       null,
-      'draft',
+      "draft",
       actor,
-      'Workflow initialized',
+      "Workflow initialized",
     );
 
     return this.buildResult(workflow);
   }
 
+  /** Lấy chi tiết workflow của 1 chứng từ (các bước + trạng thái) */
   async getWorkflow(
     tenantId: string,
     documentType: DocumentType,
@@ -144,18 +173,21 @@ export class DocumentWorkflowService {
       where: { tenantId, documentType, documentId },
       include: {
         steps: {
-          orderBy: { sequence: 'asc' },
+          orderBy: { sequence: "asc" },
         },
       },
     });
 
     if (!workflow) {
-      throw new AppError('WORKFLOW_NOT_FOUND', 404, 'Workflow not found');
+      throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
     }
 
-    return this.mapWorkflowToResult(workflow as typeof workflow & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      workflow as typeof workflow & { steps: Array<any> },
+    );
   }
 
+  /** Danh sách workflow có phân trang, lọc theo loại chứng từ/trạng thái/người duyệt */
   async listWorkflows(
     tenantId: string,
     query: {
@@ -165,7 +197,15 @@ export class DocumentWorkflowService {
       page?: number;
       limit?: number;
     },
-  ): Promise<{ data: WorkflowDocumentResult[]; pagination: { page: number; limit: number; total: number; totalPages: number } }> {
+  ): Promise<{
+    data: WorkflowDocumentResult[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
 
@@ -174,15 +214,18 @@ export class DocumentWorkflowService {
     if (query.status) where.status = query.status;
     if (query.assignedApproverId) {
       where.steps = {
-        some: { assignedApproverId: query.assignedApproverId, status: 'pending' },
+        some: {
+          assignedApproverId: query.assignedApproverId,
+          status: "pending",
+        },
       };
     }
 
     const [workflows, total] = await Promise.all([
       this.db.documentWorkflow.findMany({
         where,
-        include: { steps: { orderBy: { sequence: 'asc' } } },
-        orderBy: { updatedAt: 'desc' },
+        include: { steps: { orderBy: { sequence: "asc" } } },
+        orderBy: { updatedAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
       }),
@@ -190,11 +233,19 @@ export class DocumentWorkflowService {
     ]);
 
     return {
-      data: workflows.map((w) => this.mapWorkflowToResult(w as typeof w & { steps: Array<any> })),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 0 },
+      data: workflows.map((w) =>
+        this.mapWorkflowToResult(w as typeof w & { steps: Array<any> }),
+      ),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 0,
+      },
     };
   }
 
+  /** Thực hiện hành động duyệt: approve / reject / cancel — có optimistic lock version */
   async performAction(
     tenantId: string,
     documentType: DocumentType,
@@ -211,7 +262,7 @@ export class DocumentWorkflowService {
         WHERE id = (
           SELECT id FROM document_workflows
           WHERE tenant_id = ${tenantId}
-            AND document_type = ${documentType}::text
+            AND document_type = ${documentType}::"DocumentType"
             AND document_id = ${documentId}
           LIMIT 1
         )
@@ -219,63 +270,122 @@ export class DocumentWorkflowService {
       `;
       const locked = rows[0];
       if (!locked) {
-        throw new AppError('WORKFLOW_NOT_FOUND', 404, 'Workflow not found');
+        throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
       }
 
       const workflow = await trx.documentWorkflow.findFirst({
         where: { id: locked.id, tenantId },
-        include: { steps: { orderBy: { sequence: 'asc' } } },
+        include: { steps: { orderBy: { sequence: "asc" } } },
       });
       if (!workflow) {
-        throw new AppError('WORKFLOW_NOT_FOUND', 404, 'Workflow not found');
+        throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
       }
 
       const currentStatus = workflow.status as WorkflowDocumentStatus;
       assertActionAllowed(currentStatus, input.action);
 
-      if (input.action === 'submit') {
-        return this.handleSubmit(trx, workflow as typeof workflow & { steps: any[] }, input, actor, adapter);
+      if (input.action === "submit") {
+        return this.handleSubmit(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      if (input.action === 'cancel') {
-        return this.handleCancel(trx, workflow as typeof workflow & { steps: any[] }, input, actor, adapter);
+      if (input.action === "cancel") {
+        return this.handleCancel(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      if (input.action === 'complete') {
-        return this.handleComplete(trx, workflow as typeof workflow & { steps: any[] }, input, actor, adapter);
+      if (input.action === "complete") {
+        return this.handleComplete(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          input,
+          actor,
+          adapter,
+        );
       }
 
       const step = input.stepId
-        ? workflow.steps.find((s: { id: string; status: WorkflowStepStatus }) => s.id === input.stepId)
-        : workflow.steps.find((s: { status: WorkflowStepStatus }) => s.status === 'pending');
+        ? workflow.steps.find(
+            (s: { id: string; status: WorkflowStepStatus }) =>
+              s.id === input.stepId,
+          )
+        : workflow.steps.find(
+            (s: { status: WorkflowStepStatus }) => s.status === "pending",
+          );
 
       if (!step) {
-        throw new AppError('STEP_NOT_FOUND', 404, 'No pending step found');
+        throw new AppError("STEP_NOT_FOUND", 404, "No pending step found");
       }
 
       assertStepPending(step.status as WorkflowStepStatus);
-      assertActorAssignedToStep(step as { assignedApproverId?: string | null }, actor);
+      assertActorAssignedToStep(
+        step as { assignedApproverId?: string | null },
+        actor,
+      );
 
-      if (input.action === 'approve') {
-        return this.handleStepApprove(trx, workflow as typeof workflow & { steps: any[] }, step, input, actor, adapter);
+      if (input.action === "approve") {
+        return this.handleStepApprove(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          step,
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      if (input.action === 'reject') {
-        return this.handleStepReject(trx, workflow as typeof workflow & { steps: any[] }, step, input, actor, adapter);
+      if (input.action === "reject") {
+        return this.handleStepReject(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          step,
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      if (input.action === 'proxy_sign') {
-        return this.handleProxySign(trx, workflow as typeof workflow & { steps: any[] }, step, input, actor, adapter);
+      if (input.action === "proxy_sign") {
+        return this.handleProxySign(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          step,
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      if (input.action === 'skip') {
-        return this.handleSkip(trx, workflow as typeof workflow & { steps: any[] }, step, input, actor, adapter);
+      if (input.action === "skip") {
+        return this.handleSkip(
+          trx,
+          workflow as typeof workflow & { steps: any[] },
+          step,
+          input,
+          actor,
+          adapter,
+        );
       }
 
-      throw new AppError('INVALID_ACTION', 400, `Unknown action: ${input.action}`);
+      throw new AppError(
+        "INVALID_ACTION",
+        400,
+        `Unknown action: ${input.action}`,
+      );
     });
   }
 
+  /** Gán (hoặc đổi) người duyệt cho 1 bước đang pending */
   async assignStep(
     tenantId: string,
     _documentType: DocumentType,
@@ -288,7 +398,7 @@ export class DocumentWorkflowService {
         where: { id: stepId, tenantId, documentId },
       });
       if (!step) {
-        throw new AppError('STEP_NOT_FOUND', 404, 'Step not found');
+        throw new AppError("STEP_NOT_FOUND", 404, "Step not found");
       }
       assertCanAssignStep(step.status as WorkflowStepStatus);
 
@@ -299,15 +409,18 @@ export class DocumentWorkflowService {
 
       const workflow = await trx.documentWorkflow.findFirst({
         where: { id: step.workflowId, tenantId },
-        include: { steps: { orderBy: { sequence: 'asc' } } },
+        include: { steps: { orderBy: { sequence: "asc" } } },
       });
       if (!workflow) {
-        throw new AppError('WORKFLOW_NOT_FOUND', 404, 'Workflow not found');
+        throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
       }
-      return this.mapWorkflowToResult(workflow as typeof workflow & { steps: Array<any> });
+      return this.mapWorkflowToResult(
+        workflow as typeof workflow & { steps: Array<any> },
+      );
     });
   }
 
+  /** Upload giấy ủy quyền đính kèm bước duyệt (file, số văn bản, hiệu lực...) */
   async uploadAuthorization(
     tenantId: string,
     _documentType: DocumentType,
@@ -329,7 +442,7 @@ export class DocumentWorkflowService {
       where: { id: stepId, tenantId, documentId },
     });
     if (!step) {
-      throw new AppError('STEP_NOT_FOUND', 404, 'Step not found');
+      throw new AppError("STEP_NOT_FOUND", 404, "Step not found");
     }
 
     const auth = await this.db.documentStepAuthorization.create({
@@ -352,54 +465,66 @@ export class DocumentWorkflowService {
     return { id: auth.id };
   }
 
+  /** Lịch sử chuyển trạng thái workflow — dùng hiển thị timeline trên UI */
   async getTimeline(
     tenantId: string,
     documentType: DocumentType,
     documentId: string,
-  ): Promise<Array<{
-    id: string;
-    fromStatus: string;
-    toStatus: string;
-    changedById: string;
-    changedByRole?: string | null;
-    note?: string | null;
-    changedAt: Date;
-    metadata?: unknown;
-  }>> {
-    const histories = await this.db.documentStatusHistory.findMany({
-      where: { tenantId, documentType, documentId },
-      orderBy: { changedAt: 'asc' },
-    });
-    return histories.map((h: {
+  ): Promise<
+    Array<{
       id: string;
       fromStatus: string;
       toStatus: string;
       changedById: string;
-      changedByRole: string | null;
-      note: string | null;
+      changedByRole?: string | null;
+      note?: string | null;
       changedAt: Date;
-      metadata: unknown;
-    }) => ({
-      id: h.id,
-      fromStatus: h.fromStatus,
-      toStatus: h.toStatus,
-      changedById: h.changedById,
-      changedByRole: h.changedByRole,
-      note: h.note,
-      changedAt: h.changedAt,
-      metadata: h.metadata,
-    }));
+      metadata?: unknown;
+    }>
+  > {
+    const histories = await this.db.documentStatusHistory.findMany({
+      where: { tenantId, documentType, documentId },
+      orderBy: { changedAt: "asc" },
+    });
+    return histories.map(
+      (h: {
+        id: string;
+        fromStatus: string;
+        toStatus: string;
+        changedById: string;
+        changedByRole: string | null;
+        note: string | null;
+        changedAt: Date;
+        metadata: unknown;
+      }) => ({
+        id: h.id,
+        fromStatus: h.fromStatus,
+        toStatus: h.toStatus,
+        changedById: h.changedById,
+        changedByRole: h.changedByRole,
+        note: h.note,
+        changedAt: h.changedAt,
+        metadata: h.metadata,
+      }),
+    );
   }
 
   private async handleSubmit(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ status: WorkflowStepStatus }> },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{ status: WorkflowStepStatus }>;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
   ): Promise<WorkflowDocumentResult> {
     const oldStatus = workflow.status as WorkflowDocumentStatus;
-    const newStatus: WorkflowDocumentStatus = 'in_review';
+    const newStatus: WorkflowDocumentStatus = "in_review";
     const now = new Date();
 
     const updated = await trx.documentWorkflow.update({
@@ -410,30 +535,57 @@ export class DocumentWorkflowService {
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
-    await this.appendHistory(trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId, null, oldStatus, newStatus, actor, input.note ?? 'Submitted');
+    await this.appendHistory(
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      null,
+      oldStatus,
+      newStatus,
+      actor,
+      input.note ?? "Submitted",
+    );
 
-    await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldStatus, newStatus, actor, trx);
+    await adapter.onStatusChanged(
+      workflow.tenantId,
+      workflow.documentId,
+      oldStatus,
+      newStatus,
+      actor,
+      trx,
+    );
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async handleCancel(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ status: WorkflowStepStatus }> },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{ status: WorkflowStepStatus }>;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
   ): Promise<WorkflowDocumentResult> {
     const oldStatus = workflow.status as WorkflowDocumentStatus;
-    const newStatus: WorkflowDocumentStatus = 'cancelled';
+    const newStatus: WorkflowDocumentStatus = "cancelled";
     const now = new Date();
 
     await trx.documentWorkflowStep.updateMany({
-      where: { workflowId: workflow.id, status: 'pending' },
-      data: { status: 'cancelled' },
+      where: { workflowId: workflow.id, status: "pending" },
+      data: { status: "cancelled" },
     });
 
     const updated = await trx.documentWorkflow.update({
@@ -446,25 +598,52 @@ export class DocumentWorkflowService {
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
-    await this.appendHistory(trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId, null, oldStatus, newStatus, actor, input.note ?? 'Cancelled');
+    await this.appendHistory(
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      null,
+      oldStatus,
+      newStatus,
+      actor,
+      input.note ?? "Cancelled",
+    );
 
-    await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldStatus, newStatus, actor, trx);
+    await adapter.onStatusChanged(
+      workflow.tenantId,
+      workflow.documentId,
+      oldStatus,
+      newStatus,
+      actor,
+      trx,
+    );
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async handleComplete(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ status: WorkflowStepStatus }> },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{ status: WorkflowStepStatus }>;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
   ): Promise<WorkflowDocumentResult> {
     const oldStatus = workflow.status as WorkflowDocumentStatus;
-    const newStatus: WorkflowDocumentStatus = 'completed';
+    const newStatus: WorkflowDocumentStatus = "completed";
     const now = new Date();
 
     const updated = await trx.documentWorkflow.update({
@@ -477,22 +656,71 @@ export class DocumentWorkflowService {
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
-    await this.appendHistory(trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId, null, oldStatus, newStatus, actor, input.note ?? 'Completed');
+    await this.appendHistory(
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      null,
+      oldStatus,
+      newStatus,
+      actor,
+      input.note ?? "Completed",
+    );
 
-    await adapter.onComplete(workflow.tenantId, workflow.documentId, actor, trx);
+    await adapter.onComplete(
+      workflow.tenantId,
+      workflow.documentId,
+      actor,
+      trx,
+    );
 
     await cacheInvalidationService.invalidateStockMutations(workflow.tenantId);
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async handleStepApprove(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null }> },
-    step: { id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{
+        id: string;
+        stepCode: string;
+        stepName: string;
+        sequence: number;
+        status: WorkflowStepStatus;
+        requiredSignerId: string | null;
+        assignedApproverId: string | null;
+        actualSignerId: string | null;
+        authorizedSignerId: string | null;
+        note: string | null;
+        actionAt: Date | null;
+      }>;
+    },
+    step: {
+      id: string;
+      stepCode: string;
+      stepName: string;
+      sequence: number;
+      status: WorkflowStepStatus;
+      requiredSignerId: string | null;
+      assignedApproverId: string | null;
+      actualSignerId: string | null;
+      authorizedSignerId: string | null;
+      note: string | null;
+      actionAt: Date | null;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
@@ -502,7 +730,7 @@ export class DocumentWorkflowService {
     const updatedStep = await trx.documentWorkflowStep.update({
       where: { id: step.id },
       data: {
-        status: 'approved',
+        status: "approved",
         actualSignerId: actor.userId,
         note: input.note,
         actionAt: now,
@@ -512,54 +740,110 @@ export class DocumentWorkflowService {
 
     const allSteps = await trx.documentWorkflowStep.findMany({
       where: { workflowId: workflow.id },
-      orderBy: { sequence: 'asc' },
+      orderBy: { sequence: "asc" },
     });
 
     const oldDocStatus = workflow.status as WorkflowDocumentStatus;
     const newDocStatus = computeDocumentStatus(
       allSteps.map((s) => ({ status: s.status as WorkflowStepStatus })),
       oldDocStatus,
-      'approve',
+      "approve",
     );
 
-    const nextPending = allSteps.find((s) => s.status === 'pending');
+    const nextPending = allSteps.find((s) => s.status === "pending");
 
     const updated = await trx.documentWorkflow.update({
       where: { id: workflow.id },
       data: {
         status: newDocStatus,
         currentStepCode: nextPending?.stepCode ?? null,
-        currentStepStatus: nextPending ? 'pending' : null,
+        currentStepStatus: nextPending ? "pending" : null,
         currentStepUpdatedAt: now,
         lastActionById: actor.userId,
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
     await this.appendHistory(
-      trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-      updatedStep.id, step.status, 'approved', actor, input.note ?? 'Step approved',
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      updatedStep.id,
+      step.status,
+      "approved",
+      actor,
+      input.note ?? "Step approved",
     );
 
     if (newDocStatus !== oldDocStatus) {
       await this.appendHistory(
-        trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-        null, oldDocStatus, newDocStatus, actor, `Document status changed to ${newDocStatus}`,
+        trx,
+        workflow.tenantId,
+        workflow.id,
+        workflow.documentType,
+        workflow.documentId,
+        null,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        `Document status changed to ${newDocStatus}`,
       );
-      await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldDocStatus, newDocStatus, actor, trx);
+      await adapter.onStatusChanged(
+        workflow.tenantId,
+        workflow.documentId,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        trx,
+      );
     }
 
     await cacheInvalidationService.invalidateStockDocuments(workflow.tenantId);
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async handleStepReject(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null }> },
-    step: { id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{
+        id: string;
+        stepCode: string;
+        stepName: string;
+        sequence: number;
+        status: WorkflowStepStatus;
+        requiredSignerId: string | null;
+        assignedApproverId: string | null;
+        actualSignerId: string | null;
+        authorizedSignerId: string | null;
+        note: string | null;
+        actionAt: Date | null;
+      }>;
+    },
+    step: {
+      id: string;
+      stepCode: string;
+      stepName: string;
+      sequence: number;
+      status: WorkflowStepStatus;
+      requiredSignerId: string | null;
+      assignedApproverId: string | null;
+      actualSignerId: string | null;
+      authorizedSignerId: string | null;
+      note: string | null;
+      actionAt: Date | null;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
@@ -569,7 +853,7 @@ export class DocumentWorkflowService {
     const updatedStep = await trx.documentWorkflowStep.update({
       where: { id: step.id },
       data: {
-        status: 'rejected',
+        status: "rejected",
         actualSignerId: actor.userId,
         note: input.note,
         actionAt: now,
@@ -578,12 +862,12 @@ export class DocumentWorkflowService {
     });
 
     await trx.documentWorkflowStep.updateMany({
-      where: { workflowId: workflow.id, status: 'pending' },
-      data: { status: 'cancelled' },
+      where: { workflowId: workflow.id, status: "pending" },
+      data: { status: "cancelled" },
     });
 
     const oldDocStatus = workflow.status as WorkflowDocumentStatus;
-    const newDocStatus: WorkflowDocumentStatus = 'rejected';
+    const newDocStatus: WorkflowDocumentStatus = "rejected";
 
     const updated = await trx.documentWorkflow.update({
       where: { id: workflow.id },
@@ -595,68 +879,152 @@ export class DocumentWorkflowService {
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
     await this.appendHistory(
-      trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-      updatedStep.id, step.status, 'rejected', actor, input.note ?? 'Step rejected',
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      updatedStep.id,
+      step.status,
+      "rejected",
+      actor,
+      input.note ?? "Step rejected",
     );
 
     await this.appendHistory(
-      trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-      null, oldDocStatus, newDocStatus, actor, `Document rejected at step "${step.stepName}"`,
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      null,
+      oldDocStatus,
+      newDocStatus,
+      actor,
+      `Document rejected at step "${step.stepName}"`,
     );
 
-    await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldDocStatus, newDocStatus, actor, trx);
+    await adapter.onStatusChanged(
+      workflow.tenantId,
+      workflow.documentId,
+      oldDocStatus,
+      newDocStatus,
+      actor,
+      trx,
+    );
 
     await cacheInvalidationService.invalidateStockDocuments(workflow.tenantId);
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async handleProxySign(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null }> },
-    step: { id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{
+        id: string;
+        stepCode: string;
+        stepName: string;
+        sequence: number;
+        status: WorkflowStepStatus;
+        requiredSignerId: string | null;
+        assignedApproverId: string | null;
+        actualSignerId: string | null;
+        authorizedSignerId: string | null;
+        note: string | null;
+        actionAt: Date | null;
+      }>;
+    },
+    step: {
+      id: string;
+      stepCode: string;
+      stepName: string;
+      sequence: number;
+      status: WorkflowStepStatus;
+      requiredSignerId: string | null;
+      assignedApproverId: string | null;
+      actualSignerId: string | null;
+      authorizedSignerId: string | null;
+      note: string | null;
+      actionAt: Date | null;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
   ): Promise<WorkflowDocumentResult> {
     if (!input.proxySignerId) {
-      throw new AppError('VALIDATION_ERROR', 400, 'proxySignerId is required for proxy_sign action');
+      throw new AppError(
+        "VALIDATION_ERROR",
+        400,
+        "proxySignerId is required for proxy_sign action",
+      );
     }
 
     const authorizationIds = input.authorizationIds ?? [];
     if (authorizationIds.length === 0) {
-      throw new AppError('AUTHORIZATION_INVALID', 400, 'At least one authorization document is required for proxy signing');
+      throw new AppError(
+        "AUTHORIZATION_INVALID",
+        400,
+        "At least one authorization document is required for proxy signing",
+      );
     }
 
     const authorizations = await trx.documentStepAuthorization.findMany({
-      where: { id: { in: authorizationIds }, stepId: step.id, tenantId: workflow.tenantId },
+      where: {
+        id: { in: authorizationIds },
+        stepId: step.id,
+        tenantId: workflow.tenantId,
+      },
     });
 
     if (authorizations.length !== authorizationIds.length) {
-      throw new AppError('AUTHORIZATION_INVALID', 400, 'One or more authorization documents not found');
+      throw new AppError(
+        "AUTHORIZATION_INVALID",
+        400,
+        "One or more authorization documents not found",
+      );
     }
 
     const now = new Date();
     for (const auth of authorizations) {
       if (auth.validFrom && auth.validFrom > now) {
-        throw new AppError('AUTHORIZATION_INVALID', 400, `Authorization ${auth.authorizationNo} is not yet valid`);
+        throw new AppError(
+          "AUTHORIZATION_INVALID",
+          400,
+          `Authorization ${auth.authorizationNo} is not yet valid`,
+        );
       }
       if (auth.validTo && auth.validTo < now) {
-        throw new AppError('AUTHORIZATION_INVALID', 400, `Authorization ${auth.authorizationNo} has expired`);
+        throw new AppError(
+          "AUTHORIZATION_INVALID",
+          400,
+          `Authorization ${auth.authorizationNo} has expired`,
+        );
       }
       if (!auth.fileUrl) {
-        throw new AppError('AUTHORIZATION_INVALID', 400, `Authorization ${auth.authorizationNo} has no attached file`);
+        throw new AppError(
+          "AUTHORIZATION_INVALID",
+          400,
+          `Authorization ${auth.authorizationNo} has no attached file`,
+        );
       }
     }
 
     const updatedStep = await trx.documentWorkflowStep.update({
       where: { id: step.id },
       data: {
-        status: 'signed_by_proxy',
+        status: "signed_by_proxy",
         actualSignerId: input.proxySignerId,
         authorizedSignerId: input.proxySignerId,
         note: input.note,
@@ -667,52 +1035,77 @@ export class DocumentWorkflowService {
 
     const allSteps = await trx.documentWorkflowStep.findMany({
       where: { workflowId: workflow.id },
-      orderBy: { sequence: 'asc' },
+      orderBy: { sequence: "asc" },
     });
 
     const oldDocStatus = workflow.status as WorkflowDocumentStatus;
     const newDocStatus = computeDocumentStatus(
       allSteps.map((s) => ({ status: s.status as WorkflowStepStatus })),
       oldDocStatus,
-      'proxy_sign',
+      "proxy_sign",
     );
 
-    const nextPending = allSteps.find((s) => s.status === 'pending');
+    const nextPending = allSteps.find((s) => s.status === "pending");
 
     const updated = await trx.documentWorkflow.update({
       where: { id: workflow.id },
       data: {
         status: newDocStatus,
         currentStepCode: nextPending?.stepCode ?? null,
-        currentStepStatus: nextPending ? 'pending' : null,
+        currentStepStatus: nextPending ? "pending" : null,
         currentStepUpdatedAt: now,
         lastActionById: actor.userId,
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
     await this.appendHistory(
-      trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-      updatedStep.id, step.status, 'signed_by_proxy', actor,
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      updatedStep.id,
+      step.status,
+      "signed_by_proxy",
+      actor,
       input.note ?? `Signed by proxy: ${input.proxySignerId}`,
       { proxySignerId: input.proxySignerId, authorizationIds },
     );
 
     if (newDocStatus !== oldDocStatus) {
       await this.appendHistory(
-        trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-        null, oldDocStatus, newDocStatus, actor, `Document status changed to ${newDocStatus}`,
+        trx,
+        workflow.tenantId,
+        workflow.id,
+        workflow.documentType,
+        workflow.documentId,
+        null,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        `Document status changed to ${newDocStatus}`,
       );
-      await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldDocStatus, newDocStatus, actor, trx);
+      await adapter.onStatusChanged(
+        workflow.tenantId,
+        workflow.documentId,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        trx,
+      );
     }
 
     await cacheInvalidationService.invalidateStockDocuments(workflow.tenantId);
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
+  /** Trả về các hành động user hiện tại được phép thực hiện trên chứng từ */
   async getAvailableActions(
     tenantId: string,
     documentType: DocumentType,
@@ -721,26 +1114,31 @@ export class DocumentWorkflowService {
   ): Promise<WorkflowAvailableActionsResult> {
     const workflow = await this.db.documentWorkflow.findFirst({
       where: { tenantId, documentType, documentId },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
     if (!workflow) {
-      throw new AppError('WORKFLOW_NOT_FOUND', 404, 'Workflow not found');
+      throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
     }
 
-    const currentStep = workflow.steps.find((step) => step.status === 'pending') ?? null;
+    const currentStep =
+      workflow.steps.find((step) => step.status === "pending") ?? null;
     const actions: WorkflowAction[] = [];
 
     switch (workflow.status as WorkflowDocumentStatus) {
-      case 'draft':
-        actions.push('submit', 'cancel');
+      case "draft":
+        actions.push("submit", "cancel");
         break;
-      case 'in_review':
-        if (!currentStep || !currentStep.assignedApproverId || currentStep.assignedApproverId === actor.userId) {
-          actions.push('approve', 'reject', 'proxy_sign', 'skip', 'cancel');
+      case "in_review":
+        if (
+          !currentStep ||
+          !currentStep.assignedApproverId ||
+          currentStep.assignedApproverId === actor.userId
+        ) {
+          actions.push("approve", "reject", "proxy_sign", "skip", "cancel");
         }
         break;
-      case 'approved':
-        actions.push('complete', 'cancel');
+      case "approved":
+        actions.push("complete", "cancel");
         break;
       default:
         break;
@@ -760,8 +1158,39 @@ export class DocumentWorkflowService {
 
   private async handleSkip(
     trx: Prisma.TransactionClient,
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; steps: Array<{ id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null }> },
-    step: { id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null },
+    workflow: {
+      id: string;
+      tenantId: string;
+      documentType: DocumentType;
+      documentId: string;
+      status: WorkflowDocumentStatus;
+      steps: Array<{
+        id: string;
+        stepCode: string;
+        stepName: string;
+        sequence: number;
+        status: WorkflowStepStatus;
+        requiredSignerId: string | null;
+        assignedApproverId: string | null;
+        actualSignerId: string | null;
+        authorizedSignerId: string | null;
+        note: string | null;
+        actionAt: Date | null;
+      }>;
+    },
+    step: {
+      id: string;
+      stepCode: string;
+      stepName: string;
+      sequence: number;
+      status: WorkflowStepStatus;
+      requiredSignerId: string | null;
+      assignedApproverId: string | null;
+      actualSignerId: string | null;
+      authorizedSignerId: string | null;
+      note: string | null;
+      actionAt: Date | null;
+    },
     input: WorkflowActionInput,
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
@@ -771,9 +1200,9 @@ export class DocumentWorkflowService {
     const updatedStep = await trx.documentWorkflowStep.update({
       where: { id: step.id },
       data: {
-        status: 'skipped',
+        status: "skipped",
         actualSignerId: actor.userId,
-        note: input.note ?? 'Skipped',
+        note: input.note ?? "Skipped",
         actionAt: now,
         version: { increment: 1 },
       },
@@ -781,46 +1210,71 @@ export class DocumentWorkflowService {
 
     const allSteps = await trx.documentWorkflowStep.findMany({
       where: { workflowId: workflow.id },
-      orderBy: { sequence: 'asc' },
+      orderBy: { sequence: "asc" },
     });
 
     const oldDocStatus = workflow.status as WorkflowDocumentStatus;
     const newDocStatus = computeDocumentStatus(
       allSteps.map((s) => ({ status: s.status as WorkflowStepStatus })),
       oldDocStatus,
-      'skip',
+      "skip",
     );
 
-    const nextPending = allSteps.find((s) => s.status === 'pending');
+    const nextPending = allSteps.find((s) => s.status === "pending");
 
     const updated = await trx.documentWorkflow.update({
       where: { id: workflow.id },
       data: {
         status: newDocStatus,
         currentStepCode: nextPending?.stepCode ?? null,
-        currentStepStatus: nextPending ? 'pending' : null,
+        currentStepStatus: nextPending ? "pending" : null,
         currentStepUpdatedAt: now,
         lastActionById: actor.userId,
         lastActionAt: now,
         version: { increment: 1 },
       },
-      include: { steps: { orderBy: { sequence: 'asc' } } },
+      include: { steps: { orderBy: { sequence: "asc" } } },
     });
 
     await this.appendHistory(
-      trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-      updatedStep.id, step.status, 'skipped', actor, input.note ?? 'Step skipped',
+      trx,
+      workflow.tenantId,
+      workflow.id,
+      workflow.documentType,
+      workflow.documentId,
+      updatedStep.id,
+      step.status,
+      "skipped",
+      actor,
+      input.note ?? "Step skipped",
     );
 
     if (newDocStatus !== oldDocStatus) {
       await this.appendHistory(
-        trx, workflow.tenantId, workflow.id, workflow.documentType, workflow.documentId,
-        null, oldDocStatus, newDocStatus, actor, `Document status changed to ${newDocStatus}`,
+        trx,
+        workflow.tenantId,
+        workflow.id,
+        workflow.documentType,
+        workflow.documentId,
+        null,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        `Document status changed to ${newDocStatus}`,
       );
-      await adapter.onStatusChanged(workflow.tenantId, workflow.documentId, oldDocStatus, newDocStatus, actor, trx);
+      await adapter.onStatusChanged(
+        workflow.tenantId,
+        workflow.documentId,
+        oldDocStatus,
+        newDocStatus,
+        actor,
+        trx,
+      );
     }
 
-    return this.mapWorkflowToResult(updated as typeof updated & { steps: Array<any> });
+    return this.mapWorkflowToResult(
+      updated as typeof updated & { steps: Array<any> },
+    );
   }
 
   private async appendHistory(
@@ -843,7 +1297,7 @@ export class DocumentWorkflowService {
         documentType,
         documentId,
         stepId,
-        fromStatus: fromStatus ?? '',
+        fromStatus: fromStatus ?? "",
         toStatus,
         changedById: actor.userId,
         changedByRole: actor.role ?? null,
@@ -853,19 +1307,50 @@ export class DocumentWorkflowService {
     });
   }
 
-  private async buildResult(
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; currentStepCode: string | null; currentStepStatus: WorkflowStepStatus | null; currentStepUpdatedAt: Date | null; lastActionById: string | null; lastActionAt: Date | null },
-  ): Promise<WorkflowDocumentResult> {
+  private async buildResult(workflow: {
+    id: string;
+    tenantId: string;
+    documentType: DocumentType;
+    documentId: string;
+    status: WorkflowDocumentStatus;
+    currentStepCode: string | null;
+    currentStepStatus: WorkflowStepStatus | null;
+    currentStepUpdatedAt: Date | null;
+    lastActionById: string | null;
+    lastActionAt: Date | null;
+  }): Promise<WorkflowDocumentResult> {
     const steps = await this.db.documentWorkflowStep.findMany({
       where: { workflowId: workflow.id },
-      orderBy: { sequence: 'asc' },
+      orderBy: { sequence: "asc" },
     });
     return this.mapWorkflowToResult({ ...workflow, steps });
   }
 
-  private mapWorkflowToResult(
-    workflow: { id: string; tenantId: string; documentType: DocumentType; documentId: string; status: WorkflowDocumentStatus; currentStepCode: string | null; currentStepStatus: WorkflowStepStatus | null; currentStepUpdatedAt: Date | null; lastActionById: string | null; lastActionAt: Date | null; steps?: Array<{ id: string; stepCode: string; stepName: string; sequence: number; status: WorkflowStepStatus; requiredSignerId: string | null; assignedApproverId: string | null; actualSignerId: string | null; authorizedSignerId: string | null; note: string | null; actionAt: Date | null }> },
-  ): WorkflowDocumentResult {
+  private mapWorkflowToResult(workflow: {
+    id: string;
+    tenantId: string;
+    documentType: DocumentType;
+    documentId: string;
+    status: WorkflowDocumentStatus;
+    currentStepCode: string | null;
+    currentStepStatus: WorkflowStepStatus | null;
+    currentStepUpdatedAt: Date | null;
+    lastActionById: string | null;
+    lastActionAt: Date | null;
+    steps?: Array<{
+      id: string;
+      stepCode: string;
+      stepName: string;
+      sequence: number;
+      status: WorkflowStepStatus;
+      requiredSignerId: string | null;
+      assignedApproverId: string | null;
+      actualSignerId: string | null;
+      authorizedSignerId: string | null;
+      note: string | null;
+      actionAt: Date | null;
+    }>;
+  }): WorkflowDocumentResult {
     const steps = (workflow.steps ?? []).map((s) => ({
       id: s.id,
       stepCode: s.stepCode,
@@ -886,7 +1371,8 @@ export class DocumentWorkflowService {
       documentId: workflow.documentId,
       status: workflow.status as WorkflowDocumentStatus,
       currentStepCode: workflow.currentStepCode,
-      currentStepStatus: workflow.currentStepStatus as WorkflowStepStatus | null,
+      currentStepStatus:
+        workflow.currentStepStatus as WorkflowStepStatus | null,
       currentStepUpdatedAt: workflow.currentStepUpdatedAt,
       lastActionById: workflow.lastActionById,
       lastActionAt: workflow.lastActionAt,

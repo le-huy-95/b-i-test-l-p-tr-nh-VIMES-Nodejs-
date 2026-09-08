@@ -1,3 +1,9 @@
+/**
+ * DỊCH VỤ POSTING TỒN KHO
+ * -----------------------
+ * Orchestrator: khi phiếu completed → cập nhật balance + ledger + costing.
+ * Có thể chạy sync hoặc qua stock-mutation-queue.
+ */
 import type { Prisma } from '../../infra/prisma-types';
 import type { QtyChange, StockBalanceWriter } from './stock-balance.port';
 import { stockBalanceService } from './stock-balance.service';

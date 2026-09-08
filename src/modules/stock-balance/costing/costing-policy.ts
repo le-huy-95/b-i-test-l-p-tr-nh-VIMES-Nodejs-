@@ -1,8 +1,13 @@
-import type { Prisma } from '../../../infra/prisma-types';
-import { AppError } from '../../../utils/app-error';
-import { stockBalanceService } from '../stock-balance.service';
-import { AvgCostingPolicy } from './avg-costing.policy';
-import { LotCostingPolicy } from './lot-costing.policy';
+/**
+ * CHÍNH SÁCH TÍNH GIÁ VỐN
+ * -----------------------
+ * Factory chọn policy theo costing mode của sản phẩm (AVG / LOT).
+ */
+import type { Prisma } from "../../../infra/prisma-types";
+import { AppError } from "../../../utils/app-error";
+import { stockBalanceService } from "../stock-balance.service";
+import { AvgCostingPolicy } from "./avg-costing.policy";
+import { LotCostingPolicy } from "./lot-costing.policy";
 
 export interface CostingChangeInput {
   tenantId: string;
@@ -27,13 +32,21 @@ function normalizeCostingMethod(method: string): string {
 export function resolveCostingPolicy(method: string): CostingPolicy {
   const normalized = normalizeCostingMethod(method);
 
-  if (normalized === 'weighted_average' || normalized === 'avg') {
+  if (normalized === "weighted_average" || normalized === "avg") {
     return avgCostingPolicy;
   }
 
-  if (normalized === 'fifo' || normalized === 'fefo' || normalized === 'specific_identification') {
+  if (
+    normalized === "fifo" ||
+    normalized === "fefo" ||
+    normalized === "specific_identification"
+  ) {
     return lotCostingPolicy;
   }
 
-  throw new AppError('VALIDATION_ERROR', 400, `Unsupported costing method: ${method}`);
+  throw new AppError(
+    "VALIDATION_ERROR",
+    400,
+    `Unsupported costing method: ${method}`,
+  );
 }

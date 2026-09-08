@@ -1,3 +1,9 @@
+/**
+ * ROUTES BÁO CÁO (/api/v1/reports)
+ * --------------------------------
+ * Yêu cầu auth + tenant context. Các endpoint: tồn kho, biến động,
+ * cảnh báo tồn thấp/hết hạn, tổng quan kho và tổ chức.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { tenantMiddleware } from '../../middlewares/tenant';

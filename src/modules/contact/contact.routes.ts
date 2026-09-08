@@ -1,3 +1,8 @@
+/**
+ * ROUTES LIÊN HỆ TENANT (/api/v1/tenant/contacts)
+ * -----------------------------------------------
+ * Danh bạ liên hệ nội bộ / đối tác của tenant.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { tenantMiddleware, requireRoles } from '../../middlewares/tenant';

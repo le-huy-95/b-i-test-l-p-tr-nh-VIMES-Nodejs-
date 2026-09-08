@@ -1,3 +1,13 @@
+/**
+ * Tích hợp Firebase Admin và xác thực Google ID Token.
+ *
+ * Hỗ trợ nhiều chiến lược verify token (theo thứ tự ưu tiên):
+ * 1. Verify cục bộ bằng public cert của Firebase (không cần gọi Admin SDK mỗi request)
+ * 2. Firebase Admin SDK (khi có service account file)
+ * 3. Google tokeninfo endpoint (fallback cuối)
+ *
+ * Dùng cho luồng đăng nhập Google/Firebase từ client (Flutter, web).
+ */
 import fs from "fs";
 import path from "path";
 import jwt, { type JwtHeader, type JwtPayload } from "jsonwebtoken";
@@ -5,24 +15,36 @@ import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth, type Auth } from "firebase-admin/auth";
 import { env } from "./env";
 
+/** Promise khởi tạo Firebase Admin — chỉ chạy một lần (singleton) */
 let initPromise: Promise<void> | null = null;
+
+/** Cache chứng chỉ x509 công khai của Firebase để verify JWT offline */
 let certCache: { expiresAt: number; certs: Record<string, string> } | null =
   null;
 
+/** URL metadata chứa public keys (kid → PEM) của Firebase securetoken */
 const FIREBASE_CERTS_URL =
   "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
+
+/** Thời gian cache cert (1 giờ) — tránh fetch Google mỗi request */
 const FIREBASE_CERT_CACHE_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Kiểm tra Firebase đã được cấu hình (project id hoặc đường dẫn service account).
+ * Dùng để bật/tắt tính năng đăng nhập Google trên môi trường cụ thể.
+ */
 export function isFirebaseConfigured(): boolean {
   return !!(env.FIREBASE_PROJECT_ID || env.FIREBASE_SERVICE_ACCOUNT_PATH);
 }
 
+/** Chuyển đường dẫn service account thành absolute path từ cwd nếu cần */
 function resolveServiceAccountPath(serviceAccountPath: string): string {
   return path.isAbsolute(serviceAccountPath)
     ? serviceAccountPath
     : path.resolve(process.cwd(), serviceAccountPath);
 }
 
+/** Đọc project_id từ file JSON service account (không khởi tạo Admin SDK) */
 function loadServiceAccountProjectId(absolutePath: string): string | undefined {
   try {
     const raw = fs.readFileSync(absolutePath, "utf8");
@@ -33,6 +55,7 @@ function loadServiceAccountProjectId(absolutePath: string): string | undefined {
   }
 }
 
+/** Giải mã JWT không verify — chỉ lấy header/payload để debug hoặc lấy kid */
 function decodeJwt(
   token: string,
 ): { header: JwtHeader; payload: JwtPayload } | null {
@@ -44,6 +67,10 @@ function decodeJwt(
   };
 }
 
+/**
+ * Khởi tạo Firebase Admin App một lần và trả về Auth instance.
+ * Yêu cầu FIREBASE_SERVICE_ACCOUNT_PATH trỏ tới file JSON hợp lệ.
+ */
 async function ensureFirebase(): Promise<Auth> {
   if (!env.FIREBASE_SERVICE_ACCOUNT_PATH) {
     throw new Error("Firebase service account is not configured");
@@ -82,6 +109,10 @@ async function ensureFirebase(): Promise<Auth> {
   return getAuth();
 }
 
+/**
+ * Lấy bộ chứng chỉ công khai Firebase (có cache TTL).
+ * Dùng kid trong JWT header để chọn đúng public key khi verify RS256.
+ */
 async function getFirebaseCerts(): Promise<Record<string, string>> {
   const now = Date.now();
   if (certCache && certCache.expiresAt > now) {
@@ -106,6 +137,10 @@ async function getFirebaseCerts(): Promise<Record<string, string>> {
   return certs;
 }
 
+/**
+ * Danh sách project id có thể dùng để verify audience/issuer.
+ * Thử lần lượt env config và aud trong token.
+ */
 function getFirebaseProjectCandidates(payload: JwtPayload): string[] {
   const candidates = [
     env.FIREBASE_PROJECT_ID,
@@ -120,6 +155,10 @@ function getFirebaseProjectCandidates(payload: JwtPayload): string[] {
   ];
 }
 
+/**
+ * Verify Firebase ID token cục bộ bằng public cert + jwt.verify.
+ * Nhanh hơn gọi Admin SDK; phù hợp khi chỉ cần uid/email từ token.
+ */
 async function verifyFirebaseIdTokenLocally(idToken: string) {
   const decoded = decodeJwt(idToken);
   if (!decoded?.header.kid) {
@@ -175,6 +214,10 @@ async function verifyFirebaseIdTokenLocally(idToken: string) {
     : new Error("Invalid Firebase ID token");
 }
 
+/**
+ * Fallback: gọi Google OAuth2 tokeninfo API để validate id_token.
+ * Trả về null nếu token không hợp lệ hoặc thiếu sub/email.
+ */
 async function verifyGoogleIdentityToken(idToken: string) {
   const response = await fetch(
     `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
@@ -207,6 +250,7 @@ async function verifyGoogleIdentityToken(idToken: string) {
   };
 }
 
+/** Ghi log claims JWT khi verify thất bại — hỗ trợ debug production */
 function logTokenDebugInfo(idToken: string) {
   const decoded = decodeJwt(idToken);
   if (!decoded) {
@@ -225,6 +269,10 @@ function logTokenDebugInfo(idToken: string) {
   );
 }
 
+/**
+ * Entry point chính: xác thực Google ID Token từ client.
+ * Thử local Firebase verify → Admin SDK → Google tokeninfo; ném lỗi gộp nếu tất cả fail.
+ */
 export async function verifyGoogleIdToken(idToken: string) {
   let firebaseAdminError: unknown;
 

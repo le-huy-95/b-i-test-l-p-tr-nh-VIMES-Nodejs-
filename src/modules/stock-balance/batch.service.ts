@@ -1,3 +1,8 @@
+/**
+ * DỊCH VỤ LÔ HÀNG (BATCH)
+ * -----------------------
+ * Tạo/quản lý batch theo sản phẩm+kho, hạn sử dụng, số lô.
+ */
 import type { Prisma } from '../../infra/prisma-types';
 import { AppError } from '../../utils/app-error';
 

@@ -1,3 +1,11 @@
+/**
+ * Tầng nghiệp vụ thông báo: đọc list, unread, đánh dấu đã đọc, tạo từ Kafka event.
+ *
+ * Cache strategy:
+ * - unread count: Redis TTL 300s, tăng dần khi tạo mới
+ * - list "trang đầu" (limit=20, không filter): Redis TTL 60s
+ * Invalidate khi mark-read / tạo mới.
+ */
 import type { Prisma, PrismaClient } from '../../../../src/infra/prisma-types';
 import type { TenantNotificationEvent } from '../../../../src/shared/notifications/event-types';
 import { EVENT_TYPE_TO_NOTIFICATION_TYPE } from '../../../../src/shared/notifications/event-types';
@@ -6,10 +14,17 @@ import type { NotificationItem } from '../dto/notification.dto';
 import type { ListNotificationsQuery, MarkReadInput } from '../dto/notification.dto';
 import { RedisNotifCache } from '../infra/redis-notif-cache';
 
+/**
+ * Mã hóa cursor phân trang: { createdAt ISO, id } → base64url.
+ * Client gửi lại cursor này để lấy trang tiếp theo (older than).
+ */
 function encodeCursor(createdAt: Date, id: string): string {
   return Buffer.from(JSON.stringify({ createdAt: createdAt.toISOString(), id })).toString('base64url');
 }
 
+/**
+ * Giải mã cursor. Sai format / hỏng base64 → null (bỏ qua, lấy từ đầu).
+ */
 function decodeCursor(cursor: string): { createdAt: Date; id: string } | null {
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
@@ -22,6 +37,10 @@ function decodeCursor(cursor: string): { createdAt: Date; id: string } | null {
   }
 }
 
+/**
+ * Map row Prisma → DTO API/WS.
+ * Date → ISO string; Json → object hoặc null.
+ */
 function toItem(row: {
   id: string;
   type: string;
@@ -68,8 +87,12 @@ export class NotificationService {
     private readonly cache: RedisNotifCache,
   ) {}
 
+  /** Expose mapper cho chỗ khác (nếu cần serialize cùng shape). */
   formatItem = toItem;
 
+  /**
+   * Số chưa đọc: cache hit thì trả luôn, miss thì COUNT DB rồi ghi cache.
+   */
   async getUnreadCount(userId: string): Promise<number> {
     const cached = await this.cache.getUnreadCount(userId);
     if (cached != null) return cached;
@@ -81,8 +104,13 @@ export class NotificationService {
     return count;
   }
 
+  /**
+   * List theo cursor (createdAt DESC, id DESC).
+   * Chỉ cache trang đầu mặc định (limit 20, không cursor/filter) vì các trang khác ít lặp lại.
+   */
   async list(userId: string, query: ListNotificationsQuery) {
     const { limit, cursor, onlyUnread, tenantId } = query;
+    // Điều kiện cache: đúng "inbox mặc định" trang 1
     const useCache = !cursor && !onlyUnread && !tenantId && limit === 20;
 
     if (useCache) {
@@ -98,6 +126,7 @@ export class NotificationService {
       userId,
       ...(onlyUnread ? { readAt: null } : {}),
       ...(tenantId ? { tenantId } : {}),
+      // Keyset pagination: lấy bản ghi "nhỏ hơn" cursor (cũ hơn)
       ...(decoded
         ? {
             OR: [
@@ -111,6 +140,7 @@ export class NotificationService {
     const rows = await this.db.notification.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      // Lấy dư 1 dòng để biết còn trang sau không
       take: limit + 1,
     });
 
@@ -131,16 +161,22 @@ export class NotificationService {
     return result;
   }
 
+  /**
+   * Chi tiết 1 thông báo thuộc user.
+   * Side-effect: nếu chưa đọc thì đánh dấu đã đọc + cập nhật unread cache.
+   */
   async detail(userId: string, id: string): Promise<{ item: NotificationItem; unreadCount: number }> {
     const row = await this.db.notification.findFirst({ where: { userId, id } });
     const found = assertFound(row, 'Notification not found');
     const item = toItem(found);
 
+    // Đã đọc rồi: không ghi DB, chỉ trả unread hiện tại
     if (found.readAt) {
       return { item, unreadCount: await this.getUnreadCount(userId) };
     }
 
     const now = new Date();
+    // updateMany + điều kiện readAt:null tránh race khi 2 request cùng mở
     await this.db.notification.updateMany({
       where: { userId, id, readAt: null },
       data: { readAt: now },
@@ -150,11 +186,18 @@ export class NotificationService {
       where: { userId, readAt: null },
     });
     await this.cache.setUnreadCount(userId, unreadCount);
+    // Xóa list cache vì item đã đổi readAt
     await this.cache.invalidateUser(userId);
 
     return { item: { ...item, readAt: now.toISOString() }, unreadCount };
   }
 
+  /**
+   * Đánh dấu đã đọc hàng loạt.
+   * - markAll=true: tất cả chưa đọc (có thể lọc tenantId)
+   * - notificationIds: chỉ những id đó
+   * - không markAll và không ids → no-op, trả unread hiện tại
+   */
   async markRead(userId: string, input: MarkReadInput) {
     const now = new Date();
     const where: Prisma.NotificationWhereInput = {
@@ -182,11 +225,27 @@ export class NotificationService {
     return { updated: result.count, unreadCount };
   }
 
+  /**
+   * Tạo Notification từ Kafka event cho 1 user.
+   *
+   * Idempotent theo unique (userId, eventId):
+   * - Kafka at-least-once → có thể nhận trùng
+   * - Đã tồn tại / race P2002 → trả null (không đẩy WS lần 2)
+   *
+   * @returns item + unreadCount để push realtime, hoặc null nếu skip
+   */
   async createFromEvent(
     userId: string,
     event: TenantNotificationEvent,
   ): Promise<{ item: NotificationItem; unreadCount: number } | null> {
     const type = EVENT_TYPE_TO_NOTIFICATION_TYPE[event.eventType] as never;
+    const eventKey = { userId_eventId: { userId, eventId: event.eventId } };
+
+    // Kafka at-least-once: skip create when already persisted to avoid P2002 noise.
+    const existing = await this.db.notification.findUnique({ where: eventKey });
+    if (existing) {
+      return null;
+    }
 
     try {
       const row = await this.db.notification.create({
@@ -210,24 +269,20 @@ export class NotificationService {
         },
       });
 
+      // Ưu tiên INCR cache; miss thì fallback COUNT DB
       const unreadCount = (await this.cache.incrementUnread(userId, 1)) ?? (await this.getUnreadCount(userId));
       await this.cache.invalidateUser(userId);
 
       return { item: toItem(row), unreadCount };
     } catch (err: unknown) {
+      // Race with another worker on the same (userId, eventId).
       if (
         typeof err === 'object' &&
         err !== null &&
         'code' in err &&
         (err as { code: string }).code === 'P2002'
       ) {
-        const existing = await this.db.notification.findFirst({
-          where: { userId, eventId: event.eventId },
-        });
-        if (!existing) return null;
-
-        const unreadCount = await this.getUnreadCount(userId);
-        return { item: toItem(existing), unreadCount };
+        return null;
       }
       throw err;
     }

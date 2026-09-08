@@ -1,3 +1,8 @@
+/**
+ * CHỌN LÔ KHI XUẤT (FIFO/FEFO)
+ * ----------------------------
+ * Chọn batch để trừ tồn khi xuất — ưu tiên hết hạn sớm hoặc nhập trước.
+ */
 import { Prisma } from '../../infra/prisma-types';
 import { d, toDecimalString } from '../../utils/decimal';
 import type { LotCandidate } from './lot-allocation';

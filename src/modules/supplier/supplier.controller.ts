@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER NHÀ CUNG CẤP
+ * -----------------------
+ * HTTP handler supplier CRUD.
+ */
 import { Request, Response } from 'express';
 import { supplierService } from './supplier.service';
 

@@ -2,9 +2,9 @@
 
 Tài liệu này thiết kế hệ thống **duyệt/ký phiếu nhiều cấp** cho các phiếu kho (`stock_issue`, `stock_receipt`, `stock_opening`), hỗ trợ:
 
-- Người duyệt nội bộ theo cấp bậc: người lập phiếu, thủ kho, kế toán trưởng, admin
-- Người giao hàng được tách riêng thành **contact/person** dùng chung cho nhiều tenant, có thể là nội bộ hoặc bên ngoài công ty
-- Mỗi vị trí có **status riêng**, **note riêng**, **thời điểm xử lý riêng**
+- Người duyệt nội bộ theo cấp bậc: người lập phiếu, thủ kho, kế toán trưởng, admin (đầu kỳ)
+- Người giao hàng **không** nằm trong chuỗi duyệt số; lưu contact/`deliveredBy` trên phiếu để **ký tay sau khi in**
+- Mỗi bước duyệt số có **status riêng**, **note riêng**, **thời điểm xử lý riêng**
 - Hỗ trợ **ký thay (proxy signing)** kèm **giấy ủy quyền** đính kèm
 - Lịch sử trạng thái đầy đủ (audit log)
 - API tối ưu: list nhẹ, detail đầy đủ, action thống nhất
@@ -57,7 +57,8 @@ Tài liệu này thiết kế hệ thống **duyệt/ký phiếu nhiều cấp**
                             │ 1:N
 ┌───────────────────────────▼────────────────────────────────────┐
 │                  document_workflow_steps                       │
-│  creator → delivery → warehouse → chief_accountant → admin    │
+│  Xuất/nhập: creator → warehouse → chief_accountant             │
+│  Đầu kỳ:    creator → warehouse → chief_accountant → admin     │
 │  status / note / actionAt / requiredSignerId                   │
 │  assignedApproverId / actualSignerId / authorizedSignerId      │
 └───────────┬──────────────────────────────┬─────────────────────┘
@@ -70,7 +71,7 @@ Tài liệu này thiết kế hệ thống **duyệt/ký phiếu nhiều cấp**
 ┌────────────────────────────────────────────────────────────────┐
 │                    people / contacts                           │
 │  person dùng chung cho nhiều tenant, không bắt buộc login       │
-│  dùng cho delivery/contact bên ngoài                            │
+│  dùng cho deliveredBy / in phiếu (ký tay), không phải bước số   │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -140,7 +141,7 @@ model DocumentWorkflowStep {
   workflowId         String             @map("workflow_id")
   documentType       DocumentType       @map("document_type") // stock_issue | stock_receipt | stock_opening
   documentId         String             @map("document_id")
-  stepCode           String             @map("step_code") // creator | delivery | warehouse | chief_accountant | admin
+  stepCode           String             @map("step_code") // creator | warehouse | chief_accountant | admin (| delivery trên phiếu cũ)
   stepName           String             @map("step_name")
   sequence           Int
   requiredRole       TenantRole?        @map("required_role")
@@ -302,7 +303,7 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
 |---|---|---|---|
 | `id` | string | ✅ | step id |
 | `workflowId` | string | ✅ | workflow id |
-| `stepCode` | string | ✅ | `creator`, `delivery`, `warehouse`, `chief_accountant`, `admin` |
+| `stepCode` | string | ✅ | `creator`, `warehouse`, `chief_accountant`, `admin` (`delivery` chỉ trên phiếu cũ) |
 | `stepName` | string | ✅ | tên hiển thị |
 | `sequence` | number | ✅ | thứ tự bước |
 | `requiredRole` | `admin` \| `warehouse_keeper` \| `accountant` \| `approver` \| `viewer`? | ❌ | role yêu cầu |
@@ -313,7 +314,7 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
 | `status` | `pending` \| `approved` \| `rejected` \| `signed_by_proxy` \| `skipped` \| `cancelled` | ✅ | trạng thái bước |
 | `note` | string? | ❌ | ghi chú bước |
 | `actionAt` | datetime? | ❌ | thời điểm xử lý |
-| `deliverySnapshot` | `DeliverySnapshot`? | ❌ | chỉ có ở bước `delivery` |
+| `deliverySnapshot` | `DeliverySnapshot`? | ❌ | legacy bước `delivery`; phiếu mới dùng `deliveredBy` trên phiếu |
 | `authorizations` | array `StepAuthorization` | ✅ | giấy ủy quyền của bước |
 
 #### 3.5.3 `DeliverySnapshot`
@@ -422,7 +423,7 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
     "companyName": "Công ty vận tải ABC",
     "note": "Giao ngoài giờ hành chính"
   },
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
+  "workflowAssignedApproverIds": ["user_010", "user_011"],
   "lines": []
 }
 ```
@@ -435,8 +436,8 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
 | `supplierId` | string? | ❌ | nhà cung cấp |
 | `receiptType` | string | ✅ | loại phiếu nhập |
 | `receiptDate` | datetime/string | ✅ | ngày phiếu |
-| `deliveredBy` | object | ❌ | contact người giao hàng |
-| `workflowAssignedApproverIds` | string[] | ✅ | người duyệt nội bộ theo thứ tự template |
+| `deliveredBy` | object | ❌ | contact người giao hàng (in / ký tay, không phải bước duyệt số) |
+| `workflowAssignedApproverIds` | string[] | ✅ | xuất/nhập: `[thủ_kho, kế_toán_trưởng]` (2 ID) |
 | `lines` | array | ✅ | dòng hàng |
 
 ##### `deliveredBy` object
@@ -467,7 +468,7 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
     "phone": "0909123456",
     "companyName": "Công ty vận tải ABC"
   },
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
+  "workflowAssignedApproverIds": ["user_010", "user_011"],
   "lines": []
 }
 ```
@@ -488,7 +489,7 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
     "companyName": "Công ty vận tải ABC"
   },
   "note": "Nhập hàng từ nhà cung cấp",
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
+  "workflowAssignedApproverIds": ["user_010", "user_011"],
   "lines": []
 }
 ```
@@ -500,12 +501,12 @@ Phần này gom **toàn bộ field cần dùng ở Flutter** vào một chỗ đ
   "warehouseId": "wh_001",
   "effectiveDate": "2026-08-18T08:00:00.000Z",
   "note": "Tạo phiếu đầu kỳ",
-  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012", "user_013"],
+  "workflowAssignedApproverIds": ["user_010", "user_011", "user_012"],
   "lines": []
 }
 ```
 
-> Với `stock_opening`, mảng `workflowAssignedApproverIds` cần 4 người cho các bước sau `creator`: `warehouse`, `chief_accountant`, `admin` và 1 bước tùy template hiện tại.
+> Với `stock_opening`, `workflowAssignedApproverIds` cần **3** ID cho các bước sau `creator`: `warehouse`, `chief_accountant`, `admin`.
 
 ```prisma
 model DocumentStatusHistory {
@@ -598,13 +599,13 @@ Workflow của từng loại phiếu được định nghĩa bằng **template**
 ### 5.1 Phân nhóm người tham gia
 
 - **Người dùng nội bộ**: lấy từ `GET /tenant/members`, dùng cho `creator`, `warehouse`, `chief_accountant`, `admin`
-- **Người giao hàng / contact bên ngoài**: lấy từ danh bạ `people/contact`, dùng cho bước `delivery`
+- **Người giao hàng / contact**: lấy từ danh bạ contact, gắn vào phiếu qua `deliveredBy` — **không** tạo bước duyệt số
 
-Người giao hàng có thể là nhân viên công ty hoặc người ngoài công ty. Điểm quan trọng là hệ thống lưu theo **contact snapshot** để không phụ thuộc việc contact đổi tên/số điện thoại sau này.
+Người giao hàng có thể là nhân viên công ty hoặc người ngoài. Hệ thống lưu snapshot trên phiếu để in / ký tay; thay đổi contact sau này không làm sai lịch sử phiếu.
 
 ```json
 {
-  "delivery": {
+  "deliveredBy": {
     "contactId": "con_001",
     "fullName": "Nguyễn Văn B",
     "phone": "0909123456",
@@ -615,26 +616,29 @@ Người giao hàng có thể là nhân viên công ty hoặc người ngoài c�
 
 ### 5.2 Template mẫu
 
+**Xuất / nhập** (`stock_issue` / `stock_receipt`):
+
 ```json
 {
   "documentType": "stock_issue",
   "steps": [
     { "stepCode": "creator",          "sequence": 1, "requiredRole": "warehouse_keeper", "optional": false },
-    { "stepCode": "delivery",         "sequence": 2, "requiredRole": "warehouse_keeper", "optional": true  },
-    { "stepCode": "warehouse",        "sequence": 3, "requiredRole": "warehouse_keeper", "optional": false },
-    { "stepCode": "chief_accountant", "sequence": 4, "requiredRole": "accountant",       "optional": false }
+    { "stepCode": "warehouse",        "sequence": 2, "requiredRole": "warehouse_keeper", "optional": false },
+    { "stepCode": "chief_accountant", "sequence": 3, "requiredRole": "accountant",       "optional": false }
   ]
 }
 ```
 
+**Đầu kỳ** (`stock_opening`): thêm bước `admin` (sequence 4).
+
 Khi tạo phiếu, backend sẽ:
 1. Tạo phiếu ở `draft`
 2. Snapshot template → tạo các `DocumentWorkflowStep`
-3. Người tạo truyền danh sách người duyệt nội bộ qua `workflowAssignedApproverIds`
-4. Bước `delivery` nhận `contactId` + snapshot của người giao hàng
+3. Người tạo truyền `workflowAssignedApproverIds` (xuất/nhập: 2 ID; đầu kỳ: 3 ID)
+4. Lưu `deliveredBy` / contact trên phiếu nếu có (không tạo step duyệt)
 5. Trả về phiếu kèm steps
 
-> Snapshot lưu vào step giúp thay đổi template sau này **không ảnh hưởng phiếu cũ** (chuyên nghiệp hơn khi lưu trữ).
+> Phiếu cũ đã init với bước `delivery` giữ nguyên hành vi. Template mới không còn bước đó.
 
 ---
 

@@ -1,3 +1,8 @@
+/**
+ * PORT SỔ CÁI KHO
+ * ---------------
+ * Interface ghi dòng ledger khi posting phiếu kho.
+ */
 import type { LedgerTxnType, Prisma } from '../../infra/prisma-types';
 
 export interface StockLedgerEntry {

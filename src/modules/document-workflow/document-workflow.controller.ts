@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER WORKFLOW DUYỆT
+ * -------------------------
+ * HTTP: submit, approve, reject, list pending, xem lịch sử bước duyệt.
+ */
 import { Request, Response } from 'express';
 import { documentWorkflowService } from './document-workflow.service';
 import { getDocumentAdapter } from './adapters/stock-document-adapter';

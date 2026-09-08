@@ -1,10 +1,19 @@
+/**
+ * Hàng đợi BullMQ hoàn tất chứng từ biến động kho (xuất / nhập) bất đồng bộ.
+ *
+ * Sau khi workflow duyệt xong, job `complete-document` gọi completeNow trên
+ * stock-issue hoặc stock-receipt service. Có retry exponential, worker concurrency
+ * và fallback inline nếu worker không khởi động được.
+ */
 import IORedis from 'ioredis';
 import { Job, Queue, Worker } from 'bullmq';
 import { env } from '../config/env';
 import type { StockDocActor } from '../shared/notifications/stock-doc-notify';
 
+/** Loại chứng từ được đưa vào hàng đợi hoàn tất */
 export type StockMutationDocumentType = 'stock_issue' | 'stock_receipt';
 
+/** Payload job hoàn tất chứng từ sau mutation kho */
 export interface StockMutationCompletionJobData {
   tenantId: string;
   documentType: StockMutationDocumentType;
@@ -22,6 +31,9 @@ const MAX_COMPLETED_JOB_AGE_SECONDS = 24 * 60 * 60;
 let queue: Queue<StockMutationCompletionJobData> | null = null;
 let worker: Worker<StockMutationCompletionJobData> | null = null;
 
+/**
+ * Tạo kết nối Redis riêng cho BullMQ (maxRetriesPerRequest: null theo yêu cầu BullMQ).
+ */
 function createConnection(): IORedis {
   return new IORedis(env.REDIS_URL, {
     maxRetriesPerRequest: null,
@@ -31,6 +43,7 @@ function createConnection(): IORedis {
   });
 }
 
+/** Lazy singleton Queue với job options mặc định (retry, cleanup) */
 function getQueue(): Queue<StockMutationCompletionJobData> {
   if (!queue) {
     queue = new Queue<StockMutationCompletionJobData>(QUEUE_NAME, {
@@ -54,10 +67,16 @@ function getQueue(): Queue<StockMutationCompletionJobData> {
   return queue;
 }
 
+/**
+ * Job ID deterministic — tránh enqueue trùng cùng chứng từ.
+ */
 function getJobId(job: StockMutationCompletionJobData): string {
   return `${job.documentType}:${job.tenantId}:${job.documentId}:complete`;
 }
 
+/**
+ * Processor: dynamic import service theo documentType và gọi completeNow.
+ */
 async function processCompletionJob(job: Job<StockMutationCompletionJobData>): Promise<void> {
   const { documentType, documentId, tenantId, actor } = job.data;
 
@@ -76,6 +95,9 @@ async function processCompletionJob(job: Job<StockMutationCompletionJobData>): P
   throw new Error(`Unsupported stock mutation document type: ${documentType}`);
 }
 
+/**
+ * Đưa job hoàn tất chứng từ vào hàng đợi; trả jobId để theo dõi.
+ */
 export async function enqueueStockMutationCompletion(
   job: StockMutationCompletionJobData,
 ): Promise<{ jobId: string }> {
@@ -85,6 +107,9 @@ export async function enqueueStockMutationCompletion(
   return { jobId };
 }
 
+/**
+ * Khởi động worker xử lý queue; nếu lỗi thì log warning (caller có thể chạy inline).
+ */
 export async function startStockMutationWorker(): Promise<void> {
   if (worker) return;
 
@@ -113,6 +138,9 @@ export async function startStockMutationWorker(): Promise<void> {
   }
 }
 
+/**
+ * Dừng worker và đóng queue khi shutdown ứng dụng.
+ */
 export async function stopStockMutationWorker(): Promise<void> {
   if (worker) {
     await worker.close().catch(() => undefined);

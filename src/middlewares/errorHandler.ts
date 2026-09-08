@@ -1,14 +1,27 @@
+/**
+ * Xử lý lỗi tập trung cho Express và các helper liên quan HTTP.
+ *
+ * errorHandler: chuẩn hóa response JSON { success, error } cho AppError, Zod, Multer, 500.
+ * notFoundHandler: 404 route không tồn tại.
+ * asyncHandler: bọc async route để lỗi được chuyển tới errorHandler.
+ * uploadHandler: bọc multer middleware và forward lỗi upload.
+ */
 import { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { AppError } from '../utils/app-error';
 import { ZodError } from 'zod';
 
+/**
+ * Middleware lỗi cuối pipeline Express (4 tham số).
+ * Map từng loại exception sang status code và mã lỗi API thống nhất.
+ */
 export function errorHandler(
   err: unknown,
   _req: Request,
   res: Response,
   _next: NextFunction,
 ): void {
+  // Lỗi nghiệp vụ có chủ đích (AppError)
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       success: false,
@@ -21,6 +34,7 @@ export function errorHandler(
     return;
   }
 
+  // Lỗi validate body/query/params từ Zod
   if (err instanceof ZodError) {
     res.status(400).json({
       success: false,
@@ -33,6 +47,7 @@ export function errorHandler(
     return;
   }
 
+  // Lỗi upload file (kích thước, số file...) — message khác nhau cho logo vs media
   if (err instanceof multer.MulterError) {
     const isLogoRoute = _req.path.endsWith('/tenants/current/logo');
     const message =
@@ -60,6 +75,7 @@ export function errorHandler(
     return;
   }
 
+  // Lỗi không mong đợi — log server, không lộ chi tiết ra client
   console.error('[Error]', err);
   res.status(500).json({
     success: false,
@@ -70,6 +86,7 @@ export function errorHandler(
   });
 }
 
+/** Handler cho route không khớp — đặt sau tất cả route definitions */
 export function notFoundHandler(_req: Request, res: Response): void {
   res.status(404).json({
     success: false,
@@ -80,6 +97,10 @@ export function notFoundHandler(_req: Request, res: Response): void {
   });
 }
 
+/**
+ * Bọc async route handler: reject/promise rejection → next(err) → errorHandler.
+ * Tránh crash process khi quên try/catch trong route async.
+ */
 export function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ) {
@@ -88,6 +109,9 @@ export function asyncHandler(
   };
 }
 
+/**
+ * Bọc middleware multer: chuyển lỗi upload sang next(err) thay vì treo request.
+ */
 export function uploadHandler(
   upload: (req: Request, res: Response, next: NextFunction) => void,
 ) {

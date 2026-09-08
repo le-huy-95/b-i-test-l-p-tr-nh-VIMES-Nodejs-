@@ -1,3 +1,8 @@
+/**
+ * ROUTES FILE (/api/v1/files)
+ * ---------------------------
+ * Upload media (ảnh sản phẩm, logo...), lấy URL signed từ MinIO.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { tenantMiddleware } from '../../middlewares/tenant';

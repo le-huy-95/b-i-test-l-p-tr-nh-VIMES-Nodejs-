@@ -1,12 +1,20 @@
-import type { PrismaClient, ContactRelationType } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import { contactSchema } from './contact.dto';
-import { listCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { cacheInvalidationService, registerCacheRefreshHandler } from '../../infra/cache-invalidation';
+/**
+ * DỊCH VỤ LIÊN HỆ
+ * ---------------
+ * CRUD contact trong tenant, cache danh sách.
+ */
+import type {
+  PrismaClient,
+  ContactRelationType,
+} from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import { contactSchema } from "./contact.dto";
+import { listCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { cacheInvalidationService } from "../../infra/cache-invalidation";
 
-const CACHE_PREFIX = 'list:contacts';
+const CACHE_PREFIX = "list:contacts";
 
 export class ContactService {
   constructor(
@@ -14,8 +22,12 @@ export class ContactService {
     private readonly cache: ListCache = listCache,
   ) {}
 
-  async listByRelationType(tenantId: string, relationType: ContactRelationType, limit?: number) {
-    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${relationType}:${limit || 'all'}`;
+  async listByRelationType(
+    tenantId: string,
+    relationType: ContactRelationType,
+    limit?: number,
+  ) {
+    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${relationType}:${limit || "all"}`;
     const cached = await this.cache.get<unknown>(cacheKey);
     if (cached) return cached;
 
@@ -27,20 +39,12 @@ export class ContactService {
 
     const data = await this.db.contact.findMany({
       where,
-      orderBy: { fullName: 'asc' },
+      orderBy: { fullName: "asc" },
       take: limit,
     });
 
     await this.cache.set(cacheKey, data);
     return data;
-  }
-
-  async refreshListCache(tenantId: string, cacheKey: string): Promise<void> {
-    const parts = cacheKey.split(':');
-    const relationType = parts[3] as ContactRelationType;
-    const limit = parts[4] === 'all' ? undefined : parseInt(parts[4], 10);
-    await this.cache.invalidate(cacheKey);
-    await this.listByRelationType(tenantId, relationType, limit);
   }
 
   async create(tenantId: string, input: unknown) {
@@ -49,7 +53,7 @@ export class ContactService {
     const result = await this.db.contact.create({
       data: {
         tenantId,
-        kind: 'external',
+        kind: "external",
         relationType: data.relationType,
         fullName: data.fullName,
         phone: data.phone,
@@ -68,7 +72,7 @@ export class ContactService {
     const row = await this.db.contact.findFirst({
       where: { id, tenantId },
     });
-    if (!row) throw new AppError('NOT_FOUND', 404, 'Contact not found');
+    if (!row) throw new AppError("NOT_FOUND", 404, "Contact not found");
     return row;
   }
 
@@ -92,9 +96,3 @@ export class ContactService {
 }
 
 export const contactService = new ContactService(prisma, listCache);
-registerCacheRefreshHandler(CACHE_PREFIX, async (key) => {
-  const parts = key.split(':');
-  const tenantId = parts[2];
-  if (!tenantId) return;
-  await contactService.refreshListCache(tenantId, key);
-});

@@ -1,3 +1,9 @@
+/**
+ * ROUTES XÁC THỰC (/api/v1/auth)
+ * -------------------------------
+ * Đăng ký, OTP, đăng nhập (email/Google), refresh token, logout, thiết bị.
+ * Có rate-limit riêng cho login/OTP/register. Một số route tenant được mount tại đây.
+ */
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { authMiddleware, requirePlatformAdmin } from '../../middlewares/auth';

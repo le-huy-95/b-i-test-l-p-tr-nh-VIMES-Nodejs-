@@ -1,3 +1,9 @@
+/**
+ * CACHE QUYỀN THEO TENANT
+ * -----------------------
+ * Lưu role + warehouseIds của user trong Redis để tránh query DB mỗi request.
+ * Fallback DB khi Redis không khả dụng.
+ */
 import type { TenantRole } from '../../infra/prisma-types';
 
 export interface CachedPermissions {

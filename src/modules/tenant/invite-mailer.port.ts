@@ -1,3 +1,8 @@
+/**
+ * PORT GỬI EMAIL MỜI THÀNH VIÊN
+ * -------------------------------
+ * Interface gửi email lời mời vào tenant. Impl: infra/email-invite-mailer.ts
+ */
 import type { EmailResult } from '../../services/email/types';
 
 export interface InviteMailer {

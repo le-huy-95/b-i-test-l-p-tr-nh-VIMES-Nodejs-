@@ -1,3 +1,8 @@
+/**
+ * ROUTES KHÁCH HÀNG (/api/v1/customers)
+ * -------------------------------------
+ * CRUD khách hàng — dùng cho phiếu xuất kho.
+ */
 import { Router } from 'express';
 import { authMiddleware } from '../../middlewares/auth';
 import { requireRoles, tenantMiddleware } from '../../middlewares/tenant';

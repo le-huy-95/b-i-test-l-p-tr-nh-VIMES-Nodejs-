@@ -1,3 +1,8 @@
+/**
+ * CONTROLLER LIÊN HỆ
+ * ------------------
+ * HTTP handler CRUD contact.
+ */
 import { Request, Response } from 'express';
 import { contactService } from './contact.service';
 import { ok, created } from '../common/controller.util';

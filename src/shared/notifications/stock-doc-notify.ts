@@ -1,18 +1,37 @@
+/**
+ * Thông báo in-app cho vòng đời phiếu nhập kho và phiếu xuất kho.
+ *
+ * Mỗi hàm `notify*` được gọi từ service chứng từ (stock-receipt, stock-issue)
+ * khi trạng thái thay đổi (gửi duyệt, duyệt, từ chối, hoàn tất, hủy).
+ *
+ * Quy tắc người nhận:
+ * - SUBMITTED → admin + accountant (tenant_roles) — cần duyệt
+ * - APPROVED / REJECTED / COMPLETED / CANCELLED → người tạo phiếu (source_creator)
+ *
+ * Tất cả hàm delegate sang `publishTenantNotification` với eventType, title/body
+ * tiếng Việt và metadata điều hướng Flutter (routeName, deeplink).
+ */
+
 import { NOTIFICATION_EVENT_TYPES } from './event-types';
 import { publishTenantNotification, actorLabel } from './publish';
 
+/** Thông tin người thực hiện hành động trên chứng từ kho */
 export interface StockDocActor {
   userId: string;
   name?: string | null;
   email?: string | null;
 }
 
+/** Thông tin tối thiểu của phiếu nhập/xuất cần cho thông báo */
 interface StockDocInfo {
   id: string;
   code: string;
   createdById: string;
 }
 
+// ─── Phiếu nhập kho (Stock Receipt) ─────────────────────────────────────────
+
+/** Thông báo khi phiếu nhập được gửi chờ duyệt — gửi tới admin và kế toán */
 export async function notifyReceiptSubmitted(
   tenantId: string,
   receipt: StockDocInfo,
@@ -38,6 +57,7 @@ export async function notifyReceiptSubmitted(
   });
 }
 
+/** Thông báo khi phiếu nhập được duyệt — gửi tới người tạo phiếu */
 export async function notifyReceiptApproved(
   tenantId: string,
   receipt: StockDocInfo,
@@ -63,6 +83,7 @@ export async function notifyReceiptApproved(
   });
 }
 
+/** Thông báo khi phiếu nhập bị từ chối — gửi tới người tạo phiếu */
 export async function notifyReceiptRejected(
   tenantId: string,
   receipt: StockDocInfo,
@@ -88,6 +109,7 @@ export async function notifyReceiptRejected(
   });
 }
 
+/** Thông báo khi phiếu nhập hoàn tất xử lý kho — gửi tới người tạo phiếu */
 export async function notifyReceiptCompleted(
   tenantId: string,
   receipt: StockDocInfo,
@@ -113,6 +135,7 @@ export async function notifyReceiptCompleted(
   });
 }
 
+/** Thông báo khi phiếu nhập bị hủy — gửi tới người tạo phiếu */
 export async function notifyReceiptCancelled(
   tenantId: string,
   receipt: StockDocInfo,
@@ -138,6 +161,9 @@ export async function notifyReceiptCancelled(
   });
 }
 
+// ─── Phiếu xuất kho (Stock Issue) ───────────────────────────────────────────
+
+/** Thông báo khi phiếu xuất được gửi chờ duyệt — gửi tới admin và kế toán */
 export async function notifyIssueSubmitted(
   tenantId: string,
   issue: StockDocInfo,
@@ -163,6 +189,7 @@ export async function notifyIssueSubmitted(
   });
 }
 
+/** Thông báo khi phiếu xuất được duyệt — gửi tới người tạo phiếu */
 export async function notifyIssueApproved(
   tenantId: string,
   issue: StockDocInfo,
@@ -188,6 +215,7 @@ export async function notifyIssueApproved(
   });
 }
 
+/** Thông báo khi phiếu xuất bị từ chối — gửi tới người tạo phiếu */
 export async function notifyIssueRejected(
   tenantId: string,
   issue: StockDocInfo,
@@ -213,6 +241,7 @@ export async function notifyIssueRejected(
   });
 }
 
+/** Thông báo khi phiếu xuất hoàn tất xử lý kho — gửi tới người tạo phiếu */
 export async function notifyIssueCompleted(
   tenantId: string,
   issue: StockDocInfo,
@@ -238,6 +267,7 @@ export async function notifyIssueCompleted(
   });
 }
 
+/** Thông báo khi phiếu xuất bị hủy — gửi tới người tạo phiếu */
 export async function notifyIssueCancelled(
   tenantId: string,
   issue: StockDocInfo,

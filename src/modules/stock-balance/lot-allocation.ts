@@ -1,3 +1,8 @@
+/**
+ * PHÂN BỔ LÔ KHI NHẬP
+ * -------------------
+ * Gán số lượng nhập vào batch mới hoặc batch hiện có theo chính sách costing.
+ */
 import { AppError } from '../../utils/app-error';
 import { d, toDecimalString } from '../../utils/decimal';
 

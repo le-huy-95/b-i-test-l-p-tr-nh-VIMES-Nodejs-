@@ -1,13 +1,19 @@
-import type { PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import { warehouseSchema } from '../../dto/warehouse.dto';
-import { paginationSchema, paginate } from '../../dto/pagination.dto';
-import { listCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { cacheInvalidationService, registerCacheRefreshHandler } from '../../infra/cache-invalidation';
+/**
+ * DỊCH VỤ KHO
+ * -----------
+ * Quản lý danh sách kho, validate mã kho unique, cache danh sách Redis.
+ * Hỗ trợ lọc theo quyền warehouseIds của user.
+ */
+import type { PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import { warehouseSchema } from "../../dto/warehouse.dto";
+import { paginationSchema, paginate } from "../../dto/pagination.dto";
+import { listCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { cacheInvalidationService } from "../../infra/cache-invalidation";
 
-const CACHE_PREFIX = 'list:warehouses';
+const CACHE_PREFIX = "list:warehouses";
 
 export class WarehouseService {
   constructor(
@@ -16,42 +22,41 @@ export class WarehouseService {
   ) {}
 
   async list(tenantId: string, query?: unknown) {
-    const cacheSuffix = !query || Object.keys(query as object).length === 0
-      ? 'all'
-      : JSON.stringify(paginationSchema.parse(query));
+    const cacheSuffix =
+      !query || Object.keys(query as object).length === 0
+        ? "all"
+        : JSON.stringify(paginationSchema.parse(query));
     const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    const cached = await this.cache.get<unknown>(cacheKey);
-    if (cached) return cached;
-
-    if (!query || Object.keys(query as object).length === 0) {
-      const data = await this.db.warehouse.findMany({
-        where: { tenantId },
-        orderBy: { code: 'asc' },
-      });
-      await this.cache.set(cacheKey, data);
-      return data;
-    }
-    const { page, limit, search } = paginationSchema.parse(query);
-    const where = {
-      tenantId,
-      ...(search
-        ? { OR: [{ code: { contains: search, mode: 'insensitive' as const } }, { name: { contains: search, mode: 'insensitive' as const } }] }
-        : {}),
-    };
-    const [data, total] = await Promise.all([
-      this.db.warehouse.findMany({ where, orderBy: { code: 'asc' }, skip: (page - 1) * limit, take: limit }),
-      this.db.warehouse.count({ where }),
-    ]);
-    const result = paginate(data, page, limit, total);
-    await this.cache.set(cacheKey, result);
-    return result;
-  }
-
-  async refreshListCache(tenantId: string, cacheKey: string): Promise<void> {
-    const suffix = cacheKey.slice(`${CACHE_PREFIX}:${tenantId}:`.length);
-    const query = suffix === 'all' ? undefined : JSON.parse(suffix) as unknown;
-    await this.cache.invalidate(cacheKey);
-    await this.list(tenantId, query);
+    return this.cache.getOrSet(cacheKey, async () => {
+      if (!query || Object.keys(query as object).length === 0) {
+        return this.db.warehouse.findMany({
+          where: { tenantId },
+          orderBy: { code: "asc" },
+        });
+      }
+      const { page, limit, search } = paginationSchema.parse(query);
+      const where = {
+        tenantId,
+        ...(search
+          ? {
+              OR: [
+                { code: { contains: search, mode: "insensitive" as const } },
+                { name: { contains: search, mode: "insensitive" as const } },
+              ],
+            }
+          : {}),
+      };
+      const [data, total] = await Promise.all([
+        this.db.warehouse.findMany({
+          where,
+          orderBy: { code: "asc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.db.warehouse.count({ where }),
+      ]);
+      return paginate(data, page, limit, total);
+    });
   }
 
   async create(tenantId: string, input: unknown) {
@@ -66,20 +71,20 @@ export class WarehouseService {
           phone: data.phone,
           latitude: data.latitude,
           longitude: data.longitude,
-          geoSource: data.latitude != null ? 'manual' : undefined,
-          geocodeStatus: data.latitude != null ? 'success' : 'not_applicable',
+          geoSource: data.latitude != null ? "manual" : undefined,
+          geocodeStatus: data.latitude != null ? "success" : "not_applicable",
         },
       });
       await cacheInvalidationService.invalidateMasterData(tenantId);
       return result;
     } catch {
-      throw new AppError('DUPLICATE_CODE', 409, 'Warehouse code exists');
+      throw new AppError("DUPLICATE_CODE", 409, "Warehouse code exists");
     }
   }
 
   async get(tenantId: string, id: string) {
     const wh = await this.db.warehouse.findFirst({ where: { id, tenantId } });
-    if (!wh) throw new AppError('NOT_FOUND', 404, 'Warehouse not found');
+    if (!wh) throw new AppError("NOT_FOUND", 404, "Warehouse not found");
     return wh;
   }
 
@@ -90,7 +95,7 @@ export class WarehouseService {
       where: { id },
       data: {
         ...data,
-        geoSource: data.latitude != null ? 'manual' : undefined,
+        geoSource: data.latitude != null ? "manual" : undefined,
       },
     });
     await cacheInvalidationService.invalidateMasterData(tenantId);
@@ -119,8 +124,3 @@ export class WarehouseService {
 }
 
 export const warehouseService = new WarehouseService(prisma, listCache);
-registerCacheRefreshHandler(CACHE_PREFIX, async (key) => {
-  const tenantId = key.split(':')[2];
-  if (!tenantId) return;
-  await warehouseService.refreshListCache(tenantId, key);
-});

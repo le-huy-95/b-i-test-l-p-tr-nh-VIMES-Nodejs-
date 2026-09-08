@@ -1,3 +1,8 @@
+/**
+ * ĐỊNH NGHĨA LOẠI MEDIA
+ * ---------------------
+ * MIME types và extension được phép upload; map folder MinIO theo loại file.
+ */
 export type MediaCategory = 'image' | 'pdf' | 'media';
 
 export const MEDIA_EXTENSIONS: Record<string, string> = {

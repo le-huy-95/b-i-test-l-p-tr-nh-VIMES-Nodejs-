@@ -1,14 +1,29 @@
+/**
+ * Redis Streams — hiện không được wire vào bootstrap (list cache dùng lazy delete
+ * trên Redis shared, không cần đồng bộ giữa instance).
+ *
+ * Giữ file để tái sử dụng nếu sau này cần fan-out invalidation cross-process
+ * cho cache local / multi-region.
+ */
 import Redis from 'ioredis';
 import { env } from '../config/env';
 import { getRedis } from './redis';
 
+/** Tên stream Redis chứa sự kiện invalidation */
 const CACHE_INVALIDATION_STREAM = 'cache:invalidate';
+/** Consumer group dùng chung cho mọi worker invalidation */
 const CACHE_INVALIDATION_GROUP = 'cache-invalidators';
+/** Giới hạn xấp xỉ số entry trong stream */
 const MAX_STREAM_LENGTH = 10_000;
+/** Thời gian block khi XREADGROUP (ms) */
 const BLOCK_MS = 5_000;
+/** Số message tối đa mỗi lần đọc */
 const BATCH_SIZE = 100;
+/** Message pending idle bao lâu thì XAUTOCLAIM reclaim (ms) */
 const PENDING_IDLE_MS = 30_000;
+/** Backoff ban đầu khi reconnect / lỗi poll */
 const RETRY_BASE_MS = 250;
+/** Backoff tối đa */
 const RETRY_MAX_MS = 5_000;
 
 type StreamFields = string[];
@@ -16,12 +31,17 @@ type StreamEntry = [string, StreamFields];
 type XAutoClaimReply = [string, StreamEntry[], string[]?];
 type XReadGroupReply = Array<[string, StreamEntry[]]>;
 
+/** Payload sự kiện invalidation cache phát trên stream */
 export interface CacheInvalidationEvent {
   tenantId: string;
   group: string;
   timestamp: number;
 }
 
+/**
+ * Tạo client Redis riêng cho consumer stream — cấu hình reconnect
+ * chỉ khi lỗi READONLY (replica), tránh reconnect vô ích với BUSYGROUP.
+ */
 function buildStreamClient(): Redis {
   return new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: 1,
@@ -36,6 +56,9 @@ function buildStreamClient(): Redis {
   });
 }
 
+/**
+ * Parse field `data` từ entry stream thành CacheInvalidationEvent.
+ */
 function parseEvent(fields: StreamFields): CacheInvalidationEvent | null {
   const payloadIndex = fields.indexOf('data');
   if (payloadIndex === -1 || !fields[payloadIndex + 1]) return null;
@@ -46,10 +69,15 @@ function parseEvent(fields: StreamFields): CacheInvalidationEvent | null {
   }
 }
 
+/** Tiện ích chờ async backoff */
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Publish sự kiện invalidation lên stream (fire-and-forget từ API node).
+ * Dùng Redis chính qua getRedis(); lỗi chỉ log, không throw.
+ */
 export async function publishCacheInvalidation(
   tenantId: string,
   group: string,
@@ -78,12 +106,17 @@ export async function publishCacheInvalidation(
   }
 }
 
+/** Tùy chọn khởi tạo consumer invalidation stream */
 export interface StreamConsumerOptions {
   consumerName: string;
   onMessage: (event: CacheInvalidationEvent) => Promise<void>;
   onError?: (err: Error) => void;
 }
 
+/**
+ * Consumer Redis Stream: đảm bảo group, replay pending, poll message mới,
+ * gọi callback onMessage và ACK sau khi xử lý thành công.
+ */
 export class CacheInvalidationStreamConsumer {
   private readonly redis: Redis;
   private running = false;
@@ -93,6 +126,9 @@ export class CacheInvalidationStreamConsumer {
     this.redis = buildStreamClient();
   }
 
+  /**
+   * Bắt đầu consumer: connect, tạo group nếu chưa có, replay pending, chạy poll loop.
+   */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -110,6 +146,9 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /**
+   * Dừng consumer và đóng kết nối Redis.
+   */
   async stop(): Promise<void> {
     this.running = false;
     if (this.loopPromise) {
@@ -122,6 +161,7 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /** Kết nối Redis với exponential backoff cho đến khi thành công hoặc stop */
   private async connectWithBackoff(): Promise<void> {
     let delay = RETRY_BASE_MS;
     while (this.running) {
@@ -139,6 +179,7 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /** Tạo consumer group trên stream; bỏ qua lỗi BUSYGROUP nếu group đã tồn tại */
   private async ensureGroup(): Promise<void> {
     try {
       await this.redis.xgroup('CREATE', CACHE_INVALIDATION_STREAM, CACHE_INVALIDATION_GROUP, '$', 'MKSTREAM');
@@ -150,6 +191,7 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /** Reclaim và xử lý message pending (idle quá lâu) trước khi đọc message mới */
   private async replayPending(): Promise<void> {
     let startId = '0-0';
 
@@ -178,6 +220,7 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /** Vòng poll XREADGROUP BLOCK — đọc batch message và xử lý từng entry */
   private async poll(): Promise<void> {
     let delay = RETRY_BASE_MS;
 
@@ -213,6 +256,7 @@ export class CacheInvalidationStreamConsumer {
     }
   }
 
+  /** Parse event, gọi onMessage, ACK hoặc báo lỗi qua onError */
   private async handleMessage(id: string, fields: StreamFields): Promise<void> {
     const event = parseEvent(fields);
     if (!event) {
@@ -229,6 +273,9 @@ export class CacheInvalidationStreamConsumer {
   }
 }
 
+/**
+ * Factory tạo CacheInvalidationStreamConsumer với tên consumer và handler.
+ */
 export function createCacheInvalidationConsumer(
   consumerName: string,
   onMessage: (event: CacheInvalidationEvent) => Promise<void>,

@@ -1,3 +1,7 @@
+/**
+ * Express middleware xác thực REST /api/v1/notifications.
+ * Gắn req.user sau khi JWT hợp lệ; khác WS auth ở chỗ throw AppError (HTTP 401).
+ */
 import { Request, Response, NextFunction } from 'express';
 import type { PrismaClient } from '../../../../src/infra/prisma-types';
 import { prisma } from '../../../../src/infra/prisma';
@@ -7,6 +11,11 @@ import { verifyAccessToken } from '../../../../src/utils/crypto';
 export class AuthMiddleware {
   constructor(private readonly db: PrismaClient = prisma) {}
 
+  /**
+   * Đọc Authorization: Bearer, verify JWT, load user, check isActive + tokenVersion.
+   * Thành công → gán req.user rồi next().
+   * Token thiếu/sai/revoke → AppError 401 (errorHandler trả JSON).
+   */
   authenticate = async (req: Request, _res: Response, next: NextFunction) => {
     try {
       const header = req.headers.authorization;
@@ -35,9 +44,11 @@ export class AuthMiddleware {
       next();
     } catch (err) {
       if (err instanceof AppError) return next(err);
+      // jwt.verify throw → gói thành 401, không lộ stack
       next(new AppError('UNAUTHORIZED', 401, 'Invalid access token'));
     }
   };
 }
 
+/** Instance dùng trong routes — authenticate bind sẵn prisma. */
 export const authMiddleware = new AuthMiddleware(prisma).authenticate;

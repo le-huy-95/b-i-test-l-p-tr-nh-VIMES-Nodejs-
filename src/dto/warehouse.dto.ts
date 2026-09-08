@@ -1,5 +1,11 @@
+/**
+ * Schema Zod và DTO cho kho hàng (warehouse).
+ *
+ * Validate mã, tên, địa chỉ và tọa độ GPS khi tạo/cập nhật kho.
+ */
 import { z } from 'zod';
 
+/* Schema kho — latitude/longitude tùy chọn trong phạm vi hợp lệ */
 export const warehouseSchema = z.object({
   code: z.string().min(1),
   name: z.string().min(1),

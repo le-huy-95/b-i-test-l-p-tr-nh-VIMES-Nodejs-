@@ -1,14 +1,20 @@
-import type { PrismaClient } from '../../infra/prisma-types';
-import { prisma } from '../../infra/prisma';
-import { AppError } from '../../utils/app-error';
-import { productSchema } from '../../dto/product.dto';
-import { paginationSchema, paginate } from '../../dto/pagination.dto';
-import { listCache } from '../../infra/redis-list-cache';
-import type { ListCache } from '../common/list-cache.port';
-import { cacheInvalidationService, registerCacheRefreshHandler } from '../../infra/cache-invalidation';
-import { d, toDecimalString } from '../../utils/decimal';
+/**
+ * DỊCH VỤ SẢN PHẨM
+ * ----------------
+ * Master data sản phẩm: SKU, tên, đơn vị, min stock, costing mode.
+ * Invalidate cache master khi thay đổi.
+ */
+import type { PrismaClient } from "../../infra/prisma-types";
+import { prisma } from "../../infra/prisma";
+import { AppError } from "../../utils/app-error";
+import { productSchema } from "../../dto/product.dto";
+import { paginationSchema, paginate } from "../../dto/pagination.dto";
+import { listCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { cacheInvalidationService } from "../../infra/cache-invalidation";
+import { d, toDecimalString } from "../../utils/decimal";
 
-const CACHE_PREFIX = 'list:products';
+const CACHE_PREFIX = "list:products";
 
 export class ProductService {
   constructor(
@@ -17,51 +23,46 @@ export class ProductService {
   ) {}
 
   async list(tenantId: string, query?: unknown) {
-    const cacheSuffix = !query || Object.keys(query as object).length === 0
-      ? 'all'
-      : JSON.stringify(paginationSchema.parse(query));
+    const cacheSuffix =
+      !query || Object.keys(query as object).length === 0
+        ? "all"
+        : JSON.stringify(paginationSchema.parse(query));
     const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    const cached = await this.cache.get<unknown>(cacheKey);
-    if (cached) return cached;
+    return this.cache.getOrSet(cacheKey, async () => {
+      if (!query || Object.keys(query as object).length === 0) {
+        return this.db.product.findMany({
+          where: { tenantId, isActive: true },
+          include: { units: true },
+          orderBy: { createdAt: "desc" },
+        });
+      }
 
-    if (!query || Object.keys(query as object).length === 0) {
-      const data = await this.db.product.findMany({
-        where: { tenantId, isActive: true },
-        include: { units: true },
-        orderBy: { sku: 'asc' },
-      });
-      await this.cache.set(cacheKey, data);
-      return data;
-    }
-
-    const { page, limit, search } = paginationSchema.parse(query);
-    const where = {
-      tenantId,
-      isActive: true,
-      ...(search
-        ? { OR: [{ sku: { contains: search, mode: 'insensitive' as const } }, { name: { contains: search, mode: 'insensitive' as const } }, { barcode: { contains: search, mode: 'insensitive' as const } }] }
-        : {}),
-    };
-    const [data, total] = await Promise.all([
-      this.db.product.findMany({
-        where,
-        include: { units: true },
-        orderBy: { sku: 'asc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.db.product.count({ where }),
-    ]);
-    const result = paginate(data, page, limit, total);
-    await this.cache.set(cacheKey, result);
-    return result;
-  }
-
-  async refreshListCache(tenantId: string, cacheKey: string): Promise<void> {
-    const suffix = cacheKey.slice(`${CACHE_PREFIX}:${tenantId}:`.length);
-    const query = suffix === 'all' ? undefined : JSON.parse(suffix) as unknown;
-    await this.cache.invalidate(cacheKey);
-    await this.list(tenantId, query);
+      const { page, limit, search } = paginationSchema.parse(query);
+      const where = {
+        tenantId,
+        isActive: true,
+        ...(search
+          ? {
+              OR: [
+                { sku: { contains: search, mode: "insensitive" as const } },
+                { name: { contains: search, mode: "insensitive" as const } },
+                { barcode: { contains: search, mode: "insensitive" as const } },
+              ],
+            }
+          : {}),
+      };
+      const [data, total] = await Promise.all([
+        this.db.product.findMany({
+          where,
+          include: { units: true },
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.db.product.count({ where }),
+      ]);
+      return paginate(data, page, limit, total);
+    });
   }
 
   async create(tenantId: string, input: unknown) {
@@ -74,9 +75,14 @@ export class ProductService {
         where: { id: fileId, tenantId },
         select: { url: true, mimeType: true },
       });
-      if (!file) throw new AppError('NOT_FOUND', 404, 'Product image file not found');
-      if (!file.mimeType.startsWith('image/')) {
-        throw new AppError('INVALID_FILE_TYPE', 400, 'Product image must be an image file');
+      if (!file)
+        throw new AppError("NOT_FOUND", 404, "Product image file not found");
+      if (!file.mimeType.startsWith("image/")) {
+        throw new AppError(
+          "INVALID_FILE_TYPE",
+          400,
+          "Product image must be an image file",
+        );
       }
       imageUrl = file.url;
     }
@@ -110,7 +116,7 @@ export class ProductService {
       await cacheInvalidationService.invalidateMasterData(tenantId);
       return result;
     } catch {
-      throw new AppError('DUPLICATE_SKU', 409, 'SKU already exists');
+      throw new AppError("DUPLICATE_SKU", 409, "SKU already exists");
     }
   }
 
@@ -119,7 +125,7 @@ export class ProductService {
       where: { id, tenantId },
       include: { units: true },
     });
-    if (!product) throw new AppError('NOT_FOUND', 404, 'Product not found');
+    if (!product) throw new AppError("NOT_FOUND", 404, "Product not found");
     return product;
   }
 
@@ -129,20 +135,22 @@ export class ProductService {
       where: {
         tenantId,
         productId: id,
-        status: 'active',
+        status: "active",
         expiresAt: { lt: new Date() },
       },
-      data: { status: 'expired' },
+      data: { status: "expired" },
     });
 
     const [balances, reservedRows, batches] = await Promise.all([
       this.db.stockBalance.findMany({
         where: { tenantId, productId: id },
-        include: { warehouse: { select: { id: true, code: true, name: true } } },
+        include: {
+          warehouse: { select: { id: true, code: true, name: true } },
+        },
       }),
       this.db.stockReservation.groupBy({
-        by: ['warehouseId', 'batchId'],
-        where: { tenantId, productId: id, status: 'active' },
+        by: ["warehouseId", "batchId"],
+        where: { tenantId, productId: id, status: "active" },
         _sum: { qtyBaseUnit: true },
       }),
       this.db.batch.findMany({ where: { tenantId, productId: id } }),
@@ -150,14 +158,15 @@ export class ProductService {
 
     const reservedMap = new Map(
       reservedRows.map((row) => [
-        `${row.warehouseId}:${row.batchId ?? ''}`,
+        `${row.warehouseId}:${row.batchId ?? ""}`,
         d(row._sum.qtyBaseUnit?.toString() ?? 0),
       ]),
     );
     const batchMap = new Map(batches.map((b) => [b.id, b]));
 
     const lots = balances.map((b) => {
-      const reservedQty = reservedMap.get(`${b.warehouseId}:${b.batchId ?? ''}`) ?? d(0);
+      const reservedQty =
+        reservedMap.get(`${b.warehouseId}:${b.batchId ?? ""}`) ?? d(0);
       const onhandQty = d(b.onhandQty.toString());
       const batch = b.batchId ? batchMap.get(b.batchId) : undefined;
       return {
@@ -174,7 +183,12 @@ export class ProductService {
 
     const byWarehouse = new Map<
       string,
-      { warehouseId: string; warehouse: (typeof balances)[0]['warehouse']; onhand: ReturnType<typeof d>; reserved: ReturnType<typeof d> }
+      {
+        warehouseId: string;
+        warehouse: (typeof balances)[0]["warehouse"];
+        onhand: ReturnType<typeof d>;
+        reserved: ReturnType<typeof d>;
+      }
     >();
     for (const lot of lots) {
       const prev = byWarehouse.get(lot.warehouseId) ?? {
@@ -212,9 +226,14 @@ export class ProductService {
         where: { id: fileId, tenantId },
         select: { url: true, mimeType: true },
       });
-      if (!file) throw new AppError('NOT_FOUND', 404, 'Product image file not found');
-      if (!file.mimeType.startsWith('image/')) {
-        throw new AppError('INVALID_FILE_TYPE', 400, 'Product image must be an image file');
+      if (!file)
+        throw new AppError("NOT_FOUND", 404, "Product image file not found");
+      if (!file.mimeType.startsWith("image/")) {
+        throw new AppError(
+          "INVALID_FILE_TYPE",
+          400,
+          "Product image must be an image file",
+        );
       }
       imageUrl = file.url;
     }
@@ -250,8 +269,3 @@ export class ProductService {
 }
 
 export const productService = new ProductService(prisma, listCache);
-registerCacheRefreshHandler(CACHE_PREFIX, async (key) => {
-  const tenantId = key.split(':')[2];
-  if (!tenantId) return;
-  await productService.refreshListCache(tenantId, key);
-});

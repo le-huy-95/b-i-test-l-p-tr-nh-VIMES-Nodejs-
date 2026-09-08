@@ -1,3 +1,10 @@
+/**
+ * Khởi tạo và cung cấp nodemailer Transporter singleton.
+ *
+ * Ưu tiên SMTP thật (Gmail/custom) từ env; nếu thất bại hoặc chưa cấu hình
+ * thì fallback Ethereal test inbox chỉ trong development. Production không có
+ * SMTP hợp lệ sẽ trả null — caller phải xử lý không gửi được mail.
+ */
 import nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
 import { env, isSmtpConfigured } from '../config/env';
@@ -6,10 +13,16 @@ let transporter: Transporter | null = null;
 let initPromise: Promise<Transporter | null> | null = null;
 let usingEthereal = false;
 
+/**
+ * Kiểm tra có đang dùng Ethereal (inbox test) hay không — hữu ích khi log preview URL.
+ */
 export function isUsingEthereal(): boolean {
   return usingEthereal;
 }
 
+/**
+ * Tạo transporter SMTP từ biến môi trường và verify kết nối.
+ */
 async function createGmailTransporter(): Promise<Transporter> {
   const pass = env.SMTP_PASS?.replace(/\s/g, '') ?? '';
   const t = nodemailer.createTransport({
@@ -25,6 +38,9 @@ async function createGmailTransporter(): Promise<Transporter> {
   return t;
 }
 
+/**
+ * Fallback development: tạo tài khoản Ethereal tạm và transporter tương ứng.
+ */
 async function createEtherealTransporter(): Promise<Transporter> {
   const testAccount = await nodemailer.createTestAccount();
   const t = nodemailer.createTransport({
@@ -41,6 +57,9 @@ async function createEtherealTransporter(): Promise<Transporter> {
   return t;
 }
 
+/**
+ * Logic khởi tạo một lần: SMTP thật → Ethereal (dev only) → null.
+ */
 async function initTransporter(): Promise<Transporter | null> {
   if (isSmtpConfigured()) {
     try {
@@ -65,6 +84,9 @@ async function initTransporter(): Promise<Transporter | null> {
   }
 }
 
+/**
+ * Lấy transporter đã khởi tạo; các lần gọi sau dùng chung promise singleton.
+ */
 export async function getMailTransporter(): Promise<Transporter | null> {
   if (transporter) return transporter;
   if (!initPromise) {
