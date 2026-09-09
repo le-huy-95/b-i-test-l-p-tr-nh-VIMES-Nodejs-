@@ -50,7 +50,15 @@ describe('stock issue lifecycle', () => {
     mockPrisma.stockIssue.update.mockReset();
   });
 
-  it('submits a draft issue by creating lot-level reservations', async () => {
+  it('markPendingApproval creates lot-level reservations for a draft issue', async () => {
+    mockPrisma.stockIssue.findFirst.mockResolvedValue({
+      id: 'issue-1',
+      tenantId: 'tenant-1',
+      status: 'draft',
+      warehouseId: 'warehouse-1',
+      details: [],
+    });
+
     const trx = {
       $queryRaw: vi
         .fn()
@@ -105,7 +113,7 @@ describe('stock issue lifecycle', () => {
 
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
     const actor = { userId: 'user-1', name: 'Tester' };
-    const result = await stockIssueService.submit('tenant-1', 'issue-1', actor);
+    const result = await stockIssueService.markPendingApproval('tenant-1', 'issue-1', actor);
 
     expect(trx.stockReservation.createMany).toHaveBeenCalledWith({
       data: [

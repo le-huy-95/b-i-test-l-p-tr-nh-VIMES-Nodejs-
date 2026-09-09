@@ -31,6 +31,8 @@ export const NOTIFICATION_EVENT_TYPES = {
   ISSUE_REJECTED: 'ISSUE_REJECTED',
   ISSUE_COMPLETED: 'ISSUE_COMPLETED',
   ISSUE_CANCELLED: 'ISSUE_CANCELLED',
+  ISSUE_OUT_OF_STOCK: 'ISSUE_OUT_OF_STOCK',
+  ISSUE_STOCK_AVAILABLE: 'ISSUE_STOCK_AVAILABLE',
 } as const;
 
 /** Union type của tất cả giá trị trong NOTIFICATION_EVENT_TYPES */
@@ -88,4 +90,6 @@ export const EVENT_TYPE_TO_NOTIFICATION_TYPE: Record<
   ISSUE_REJECTED: 'issue_rejected',
   ISSUE_COMPLETED: 'issue_completed',
   ISSUE_CANCELLED: 'issue_cancelled',
+  ISSUE_OUT_OF_STOCK: 'issue_out_of_stock',
+  ISSUE_STOCK_AVAILABLE: 'issue_stock_available',
 };

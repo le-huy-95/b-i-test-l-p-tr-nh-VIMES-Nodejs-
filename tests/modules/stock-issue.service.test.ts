@@ -8,9 +8,11 @@ const mockApply = vi.fn();
 const mockGenerateNextCode = vi.fn();
 const mockTransaction = vi.fn();
 const mockInitWorkflow = vi.fn();
+const mockPerformAction = vi.fn();
+const mockStartReviewOnCreate = vi.fn();
 const mockPrisma = {
   $transaction: mockTransaction,
-  stockIssue: { create: vi.fn() },
+  stockIssue: { create: vi.fn(), findFirst: vi.fn() },
   product: { findMany: vi.fn() },
   userTenant: { findMany: vi.fn() },
 };
@@ -48,6 +50,12 @@ vi.mock('../../src/shared/notifications/stock-doc-notify', () => ({
 vi.mock('../../src/modules/document-workflow/document-workflow.service', () => ({
   documentWorkflowService: {
     initWorkflow: mockInitWorkflow,
+    performAction: mockPerformAction,
+    startReviewOnCreate: mockStartReviewOnCreate,
+    getWorkflow: vi.fn().mockResolvedValue({
+      status: 'in_review',
+      currentStepCode: 'warehouse',
+    }),
   },
 }));
 
@@ -61,11 +69,20 @@ describe('stock issue service', () => {
     mockGenerateNextCode.mockReset();
     mockTransaction.mockReset();
     mockInitWorkflow.mockReset();
+    mockPerformAction.mockReset();
+    mockStartReviewOnCreate.mockReset();
+    mockPrisma.stockIssue.create.mockReset();
+    mockPrisma.stockIssue.findFirst.mockReset();
+    mockPrisma.product.findMany.mockReset();
   });
 
-  it('initializes workflow when creating an issue', async () => {
+  it('initializes workflow and starts in_review while doc stays draft', async () => {
     mockGenerateNextCode.mockResolvedValue('ISSUE-001');
-    mockPrisma.stockIssue.create.mockResolvedValue({ id: 'issue-1' });
+    mockPrisma.stockIssue.create.mockResolvedValue({ id: 'issue-1', status: 'draft' });
+    mockPrisma.stockIssue.findFirst.mockResolvedValue({
+      id: 'issue-1',
+      status: 'draft',
+    });
     mockPrisma.product.findMany.mockResolvedValue([
       {
         id: 'product-1',
@@ -73,9 +90,10 @@ describe('stock issue service', () => {
         units: [{ unitName: 'pcs', conversionRate: 1 }],
       },
     ]);
+    mockStartReviewOnCreate.mockResolvedValue({ status: 'in_review' });
 
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
-    await stockIssueService.create('tenant-1', 'user-1', {
+    const result = await stockIssueService.create('tenant-1', 'user-1', {
       warehouseId: 'wh-1',
       issueType: 'internal_use',
       issueDate: '2026-08-19',
@@ -92,6 +110,65 @@ describe('stock issue service', () => {
       {},
       undefined,
     );
+    expect(mockStartReviewOnCreate).toHaveBeenCalledWith(
+      'tenant-1',
+      'stock_issue',
+      'issue-1',
+      { userId: 'user-1', name: undefined },
+      {},
+    );
+    expect(mockPerformAction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      id: 'issue-1',
+      status: 'draft',
+      workflowStatus: 'in_review',
+      currentStepCode: 'warehouse',
+    });
+  });
+
+  it('persists deliveredByName on create so GET can show người giao hàng', async () => {
+    mockGenerateNextCode.mockResolvedValue('ISSUE-002');
+    mockPrisma.stockIssue.create.mockResolvedValue({
+      id: 'issue-2',
+      status: 'draft',
+      deliveredByName: 'Nguyễn Văn Giao',
+    });
+    mockPrisma.stockIssue.findFirst.mockResolvedValue({
+      id: 'issue-2',
+      status: 'draft',
+      deliveredByName: 'Nguyễn Văn Giao',
+    });
+    mockPrisma.product.findMany.mockResolvedValue([
+      {
+        id: 'product-1',
+        baseUnitName: 'pcs',
+        units: [{ unitName: 'pcs', conversionRate: 1 }],
+      },
+    ]);
+    mockStartReviewOnCreate.mockResolvedValue({ status: 'in_review' });
+
+    const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
+    const result = await stockIssueService.create('tenant-1', 'user-1', {
+      warehouseId: 'wh-1',
+      issueType: 'internal_use',
+      issueDate: '2026-09-09',
+      deliveredByName: 'Nguyễn Văn Giao',
+      lines: [
+        { productId: 'product-1', unitName: 'pcs', requestedQty: 1, actualQty: 1 },
+      ],
+    });
+
+    expect(mockPrisma.stockIssue.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          deliveredByName: 'Nguyễn Văn Giao',
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      id: 'issue-2',
+      deliveredByName: 'Nguyễn Văn Giao',
+    });
   });
 
   it('completes an approved issue via posting and consumes reservations', async () => {

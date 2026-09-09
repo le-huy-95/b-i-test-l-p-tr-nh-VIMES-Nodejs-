@@ -106,6 +106,7 @@ const actor = { userId: 'user-1', name: 'Tester', role: 'warehouse_keeper' as co
 const mockAdapter = {
   getDocumentInfo: vi.fn(),
   onStatusChanged: vi.fn(),
+  onEnteredPendingApproval: vi.fn(),
   onComplete: vi.fn(),
   resolveInitialSigner: vi.fn(),
 };
@@ -185,6 +186,55 @@ describe('document workflow service', () => {
       await expect(
         documentWorkflowService.initWorkflow('tenant-1', 'stock_issue', 'doc-1', actor, mockAdapter),
       ).rejects.toThrowError('Document not found');
+    });
+  });
+
+  describe('startReviewOnCreate', () => {
+    it('approves creator and sets in_review without adapter status sync', async () => {
+      const trx = makeTrx();
+      mockTransaction.mockImplementation(async (cb: (trx: typeof trx) => Promise<unknown>) => cb(trx));
+      mockQueryRaw.mockResolvedValue([{ id: 'wf-1', status: 'draft', version: 0 }]);
+      trx.documentWorkflow.findFirst.mockResolvedValue({
+        id: 'wf-1',
+        tenantId: 'tenant-1',
+        documentType: 'stock_issue',
+        documentId: 'doc-1',
+        status: 'draft',
+        steps: [
+          { id: 'step-1', stepCode: 'creator', stepName: 'Người lập phiếu', sequence: 1, status: 'pending' },
+          { id: 'step-2', stepCode: 'warehouse', stepName: 'Thủ kho', sequence: 2, status: 'pending' },
+        ],
+      });
+      mockStepFindMany.mockResolvedValue([
+        { id: 'step-1', stepCode: 'creator', status: 'approved' },
+        { id: 'step-2', stepCode: 'warehouse', status: 'pending' },
+      ]);
+      mockWorkflowUpdate.mockResolvedValue({
+        id: 'wf-1',
+        status: 'in_review',
+        currentStepCode: 'warehouse',
+        currentStepStatus: 'pending',
+        steps: [],
+      });
+
+      const { documentWorkflowService } = await import('../../src/modules/document-workflow/document-workflow.service');
+      const result = await documentWorkflowService.startReviewOnCreate(
+        'tenant-1',
+        'stock_issue',
+        'doc-1',
+        actor,
+        mockAdapter,
+      );
+
+      expect(result.status).toBe('in_review');
+      expect(result.currentStepCode).toBe('warehouse');
+      expect(mockAdapter.onStatusChanged).not.toHaveBeenCalled();
+      expect(mockStepUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'step-1' },
+          data: expect.objectContaining({ status: 'approved' }),
+        }),
+      );
     });
   });
 
@@ -293,6 +343,53 @@ describe('document workflow service', () => {
       );
 
       expect(result.currentStepCode).toBe('delivery');
+    });
+
+    it('calls onEnteredPendingApproval on first post-creator approve', async () => {
+      const trx = makeTrx();
+      mockTransaction.mockImplementation(async (cb: (trx: typeof trx) => Promise<unknown>) => cb(trx));
+      mockQueryRaw.mockResolvedValue([{ id: 'wf-1', status: 'in_review', version: 0 }]);
+      trx.documentWorkflow.findFirst.mockResolvedValue({
+        id: 'wf-1',
+        tenantId: 'tenant-1',
+        documentType: 'stock_issue',
+        documentId: 'doc-1',
+        status: 'in_review',
+        steps: [
+          { id: 'step-1', stepCode: 'creator', stepName: 'Người lập phiếu', sequence: 1, status: 'approved', workflowId: 'wf-1', assignedApproverId: 'user-1' },
+          { id: 'step-2', stepCode: 'warehouse', stepName: 'Thủ kho', sequence: 2, status: 'pending', workflowId: 'wf-1', assignedApproverId: 'user-1' },
+        ],
+      });
+      mockStepUpdate.mockResolvedValue({ id: 'step-2', status: 'approved' });
+      mockStepFindMany.mockResolvedValue([
+        { id: 'step-1', stepCode: 'creator', status: 'approved' },
+        { id: 'step-2', stepCode: 'warehouse', status: 'approved' },
+        { id: 'step-3', stepCode: 'chief_accountant', status: 'pending' },
+      ]);
+      mockWorkflowUpdate.mockResolvedValue({
+        id: 'wf-1',
+        status: 'in_review',
+        currentStepCode: 'chief_accountant',
+        currentStepStatus: 'pending',
+        steps: [],
+      });
+
+      const { documentWorkflowService } = await import('../../src/modules/document-workflow/document-workflow.service');
+      await documentWorkflowService.performAction(
+        'tenant-1',
+        'stock_issue',
+        'doc-1',
+        { action: 'approve', stepId: 'step-2', note: 'OK' },
+        actor,
+        mockAdapter,
+      );
+
+      expect(mockAdapter.onEnteredPendingApproval).toHaveBeenCalledWith(
+        'tenant-1',
+        'doc-1',
+        actor,
+        expect.anything(),
+      );
     });
 
     it('approves last step and transitions document to approved', async () => {

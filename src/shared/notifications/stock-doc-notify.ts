@@ -292,3 +292,84 @@ export async function notifyIssueCancelled(
     },
   });
 }
+
+/** Dual-publish: admin/accountant + creator (recipient policy không gộp được). */
+async function publishIssueRolesAndCreator(
+  params: {
+    eventType: (typeof NOTIFICATION_EVENT_TYPES)[keyof typeof NOTIFICATION_EVENT_TYPES];
+    tenantId: string;
+    actor: StockDocActor;
+    issue: StockDocInfo;
+    title: string;
+    body: string;
+    data?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const name = actorLabel(params.actor);
+  const base = {
+    eventType: params.eventType,
+    tenantId: params.tenantId,
+    actorUserId: params.actor.userId,
+    actorName: name,
+    source: {
+      type: 'stock_issue' as const,
+      id: params.issue.id,
+      code: params.issue.code,
+    },
+    notification: {
+      title: params.title,
+      body: params.body,
+      targetType: 'stock_issue' as const,
+      targetId: params.issue.id,
+      routeName: 'stock_issue_detail',
+      routeParams: { issueId: params.issue.id, tenantId: params.tenantId },
+      deeplink: `myapp://stock-issues/${params.issue.id}`,
+    },
+    data: params.data,
+  };
+  await publishTenantNotification({
+    ...base,
+    recipientPolicy: { type: 'tenant_roles', roles: ['admin', 'accountant'] },
+  });
+  await publishTenantNotification({
+    ...base,
+    recipientPolicy: {
+      type: 'source_creator',
+      createdByUserId: params.issue.createdById,
+    },
+  });
+}
+
+/** Thông báo khi phiếu xuất hết hàng trong kho — admin, kế toán + người tạo */
+export async function notifyIssueOutOfStock(
+  tenantId: string,
+  issue: StockDocInfo,
+  actor: StockDocActor,
+  insufficient?: unknown,
+): Promise<void> {
+  await publishIssueRolesAndCreator({
+    eventType: NOTIFICATION_EVENT_TYPES.ISSUE_OUT_OF_STOCK,
+    tenantId,
+    actor,
+    issue,
+    title: 'Sản phẩm đã hết trong kho',
+    body: `Phiếu xuất ${issue.code} tạm dừng vì sản phẩm đã hết trong kho`,
+    data: insufficient !== undefined ? { insufficient } : undefined,
+  });
+}
+
+/** Thông báo khi phiếu xuất hết hàng đã có đủ tồn trở lại */
+export async function notifyIssueStockAvailable(
+  tenantId: string,
+  issue: StockDocInfo,
+  actor: StockDocActor,
+): Promise<void> {
+  await publishIssueRolesAndCreator({
+    eventType: NOTIFICATION_EVENT_TYPES.ISSUE_STOCK_AVAILABLE,
+    tenantId,
+    actor,
+    issue,
+    title: 'Phiếu xuất đã có hàng',
+    body: `Phiếu xuất ${issue.code} đã có đủ hàng, có thể tiếp tục xử lý`,
+  });
+}
