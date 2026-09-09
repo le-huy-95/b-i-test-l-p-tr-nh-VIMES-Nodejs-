@@ -41,6 +41,7 @@ import {
   stockDocListCacheVisibilityKey,
   type StockDocVisibilityActor,
 } from "../stock-balance/stock-doc-visibility";
+import { assertStockDocEditableByCreator } from "../stock-balance/stock-doc-edit-lock";
 
 const CACHE_PREFIX = "list:stock-issues";
 
@@ -101,7 +102,27 @@ export class StockIssueService {
     );
     const doc = await this.db.stockIssue.findFirst({
       where: { id, tenantId, ...visibility },
-      include: { details: true, customer: true, warehouse: true },
+      include: {
+        details: {
+          include: {
+            batch: {
+              select: {
+                id: true,
+                productId: true,
+                warehouseId: true,
+                batchNo: true,
+                manufactureDate: true,
+                expiryDate: true,
+                supplierId: true,
+                unitCost: true,
+                createdAt: true,
+              },
+            },
+          },
+        },
+        customer: true,
+        warehouse: true,
+      },
     });
     if (!doc) throw new AppError("NOT_FOUND", 404, "Issue not found");
     return withVnTimestamps(doc);
@@ -117,7 +138,7 @@ export class StockIssueService {
     return doc;
   }
 
-  /** Tạo phiếu xuất draft — chưa trừ tồn */
+  /** Tạo phiếu xuất: draft + workflow in_review (reserve khi sang pending_approval) */
   async create(tenantId: string, userId: string, input: unknown) {
     const data = createStockIssueSchema.parse(input);
     if (data.issueType === "sale" && !data.customerId) {
@@ -139,6 +160,7 @@ export class StockIssueService {
         issueType: data.issueType,
         customerId: data.customerId,
         issueDate: toVnDate(data.issueDate),
+        deliveredByName: data.deliveredByName,
         note: data.note,
         createdById: userId,
         details: { create: details },
@@ -146,30 +168,50 @@ export class StockIssueService {
       include: { details: true },
     });
 
+    const actor = { userId, name: undefined };
     const adapter = getDocumentAdapter("stock_issue");
     await documentWorkflowService.initWorkflow(
       tenantId,
       "stock_issue",
       result.id,
-      { userId, name: undefined },
+      actor,
       adapter,
       data.workflowAssignedApproverIds,
     );
+    await documentWorkflowService.startReviewOnCreate(
+      tenantId,
+      "stock_issue",
+      result.id,
+      actor,
+      adapter,
+    );
 
+    const created = await this.requireById(tenantId, result.id);
+    const workflow = await documentWorkflowService.getWorkflow(
+      tenantId,
+      "stock_issue",
+      result.id,
+    );
+    await notifyIssueSubmitted(tenantId, created, actor);
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return withVnTimestamps(result);
+    return withVnTimestamps({
+      ...created,
+      workflowStatus: workflow.status,
+      currentStepCode: workflow.currentStepCode,
+    });
   }
 
-  /** Cập nhật phiếu xuất draft */
-  async update(tenantId: string, id: string, input: unknown) {
+  /** Cập nhật phiếu xuất draft — chỉ người tạo khi chưa khóa */
+  async update(tenantId: string, id: string, userId: string, input: unknown) {
     const doc = await this.requireById(tenantId, id);
-    if (doc.status !== "draft") {
-      throw new AppError(
-        "INVALID_STATUS_TRANSITION",
-        409,
-        "Only draft issues can be updated",
-      );
-    }
+    await assertStockDocEditableByCreator(
+      this.db,
+      tenantId,
+      "stock_issue",
+      id,
+      doc,
+      userId,
+    );
     const data = updateStockIssueSchema.parse(input);
     if (data.issueType === "sale" && !data.customerId) {
       throw new AppError(
@@ -189,6 +231,7 @@ export class StockIssueService {
             issueType: data.issueType,
             customerId: data.customerId,
             issueDate: toVnDate(data.issueDate),
+            deliveredByName: data.deliveredByName,
             note: data.note,
             version: { increment: 1 },
             details: { create: details },
@@ -201,8 +244,26 @@ export class StockIssueService {
     return withVnTimestamps(result);
   }
 
-  /** Gửi duyệt — reserve tồn kho và khởi tạo workflow */
-  async submit(tenantId: string, id: string, actor: StockDocActor) {
+  /** @deprecated Create đã start review — không gọi submit nữa */
+  async submit(_tenantId: string, _id: string, _actor: StockDocActor) {
+    throw new AppError(
+      "SUBMIT_DEPRECATED",
+      410,
+      "Submit is deprecated; documents enter review on create",
+    );
+  }
+
+  /** draft → pending_approval + reserve (sau duyệt bước đầu sau creator / legacy submit) */
+  async markPendingApproval(
+    tenantId: string,
+    id: string,
+    _actor: StockDocActor,
+  ) {
+    const existing = await this.requireById(tenantId, id);
+    if (existing.status === "pending_approval") {
+      return withVnTimestamps(existing);
+    }
+
     const result = await this.db.$transaction(
       async (trx: Prisma.TransactionClient) => {
         const rows = await trx.$queryRaw<
@@ -219,11 +280,19 @@ export class StockIssueService {
       `;
         const locked = rows[0];
         if (!locked) throw new AppError("NOT_FOUND", 404, "Issue not found");
+        if (locked.status === "pending_approval") {
+          const issue = await trx.stockIssue.findFirst({
+            where: { id, tenantId },
+            include: { details: true },
+          });
+          if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
+          return issue;
+        }
         if (locked.status !== "draft") {
           throw new AppError(
             "INVALID_STATUS_TRANSITION",
             409,
-            "Only draft can submit",
+            "Only draft can enter pending_approval",
           );
         }
         const warehouseId = locked.warehouseId ?? locked.warehouse_id;
@@ -264,7 +333,6 @@ export class StockIssueService {
       },
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    await notifyIssueSubmitted(tenantId, result, actor);
     return withVnTimestamps(result);
   }
 
@@ -300,7 +368,10 @@ export class StockIssueService {
         const issue = await trx.stockIssue.findFirst({
           where: { id, tenantId },
         });
-        if (!issue || issue.status !== "pending_approval") {
+        if (
+          !issue ||
+          (issue.status !== "pending_approval" && issue.status !== "draft")
+        ) {
           throw new AppError(
             "INVALID_STATUS_TRANSITION",
             409,

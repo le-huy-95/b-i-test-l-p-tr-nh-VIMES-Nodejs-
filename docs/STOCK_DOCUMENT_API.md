@@ -17,9 +17,10 @@ Tài liệu này là nguồn tham chiếu chính cho Flutter.
 7. [API workflow duyệt phiếu](#7-api-workflow-duyệt-phiếu)
 8. [API nhân sự và contact](#8-api-nhân-sự-và-contact)
 9. [Ràng buộc dữ liệu](#9-ràng-buộc-dữ-liệu)
-10. [Tích hợp Flutter](#10-tích-hợp-flutter)
-11. [Mapping lỗi backend → UI Flutter](#11-mapping-lỗi-backend--ui-flutter)
-12. [Checklist triển khai](#12-checklist-triển-khai)
+10. [Cơ chế lô hàng & hạn sử dụng](#10-cơ-chế-lô-hàng--hạn-sử-dụng)
+11. [Tích hợp Flutter](#11-tích-hợp-flutter)
+12. [Mapping lỗi backend → UI Flutter](#12-mapping-lỗi-backend--ui-flutter)
+13. [Checklist triển khai](#13-checklist-triển-khai)
 
 ---
 
@@ -143,11 +144,20 @@ Body:
 }
 ```
 
+> `batchId` tùy chọn: có → trừ đúng lô; không → backend tự pick theo `createdAt` ASC (xem [§10](#10-cơ-chế-lô-hàng--hạn-sử-dụng)).
+>
 > Xuất/nhập: `workflowAssignedApproverIds` = `[thủ_kho, kế_toán_trưởng]`. Người giao hàng (`deliveredBy`) chỉ để in / ký tay, không nằm trong mảng duyệt.
 
 ### 4.3 Xem chi tiết
 
 - `GET /stock-issues/:id`
+
+Response `details[]` gồm `batchId` (giữ tương thích) và object `batch`:
+
+- Có lô: `batch` = `{ id, productId, warehouseId, batchNo, manufactureDate, expiryDate, supplierId, unitCost, createdAt }`
+- Không lô (`batchId` null): `batch` = `null`
+- Không trả `tenantId` / `receiptDetailId` trong `batch`
+- Chỉ endpoint GET by id; list/create/update chưa embed `batch`
 
 ### 4.4 Cập nhật
 
@@ -223,13 +233,14 @@ Body:
       "actualQty": 98,
       "unitPrice": 120000,
       "batchNo": "L001",
-      "expiryDate": "2027-08-18T00:00:00.000Z",
-      "manufactureDate": "2026-08-01T00:00:00.000Z"
+      "expiryDate": "2027-08-18"
     }
   ]
 }
 ```
 
+> `batchNo` / `expiryDate` là tùy chọn. Khi có `batchNo`, hệ thống tạo/tái sử dụng `Batch` lúc **complete** (xem [§10](#10-cơ-chế-lô-hàng--hạn-sử-dụng)).
+>
 > Xuất/nhập: `workflowAssignedApproverIds` = `[thủ_kho, kế_toán_trưởng]` (2 ID).
 
 ### 5.3 Xem chi tiết
@@ -501,6 +512,8 @@ Body:
 - `lines.length >= 1`
 - `expectedQty >= 0`, `actualQty > 0`
 - `unitPrice >= 0`
+- `batchNo` / `expiryDate` tùy chọn (không bắt buộc theo product)
+- `batchNo` nếu gửi thì không được chuỗi rỗng (chỉ khoảng trắng)
 - `workflowAssignedApproverIds.length` khớp số bước sau `creator`
 
 ### Theo trạng thái
@@ -516,9 +529,83 @@ Gắn `Idempotency-Key` cho: tạo phiếu, submit, approve, reject, complete, c
 
 ---
 
-## 10. Tích hợp Flutter
+## 10. Cơ chế lô hàng & hạn sử dụng
 
-### 10.1 Service layer gợi ý
+> **Flutter checklist đầy đủ:** [`docs/STOCK_LOT_EXPIRY_FLUTTER_GUIDE.md`](./STOCK_LOT_EXPIRY_FLUTTER_GUIDE.md)
+
+Product **không** còn cờ `trackBatch` / `trackExpiry` / `costingMethod`. Lô là tùy chọn theo từng dòng phiếu. Tồn được ghi theo khóa `(tenant, product, warehouse, batchId, location)`.
+
+### 10.1 Phiếu nhập — tạo lô
+
+| Thời điểm | Hành vi |
+|---|---|
+| Tạo / sửa draft | Lưu `batchNo`, `expiryDate` trên dòng chi tiết. `batchId` chưa có. |
+| Complete | Nếu dòng có `batchNo` → `ensureBatch` (unique theo `tenant + product + batchNo`): tạo mới hoặc tái sử dụng. Gắn `batchId` vào dòng, tăng `StockBalance` theo lô, cập nhật `Batch.unitCost` bình quân gia quyền nếu lô đã có tồn. |
+| Không có `batchNo` | Ghi tồn với `batchId = null` (hàng không theo lô). |
+
+Chi tiết:
+
+- `expiryDate`: parse theo ngày VN (`@db.Date`), lưu trên dòng và truyền vào `Batch` khi complete.
+- Unique lô: cùng `batchNo` + cùng sản phẩm trong tenant = **một** bản ghi `Batch`. Nhập lại cùng số lô sẽ cộng tồn vào lô đó và cập nhật `unitCost` bình quân.
+- Nhiều dòng cùng `productId` + cùng `batchNo` trong một phiếu được **gộp** trước khi posting (qty cộng, đơn giá bình quân gia quyền).
+- `manufactureDate`: schema Zod vẫn nhận field này nhưng **hiện không lưu** trên dòng phiếu / không truyền vào `Batch` lúc complete — UI không nên phụ thuộc.
+
+Gợi ý Flutter nhập:
+
+1. Cho phép nhập `batchNo` + `expiryDate` trên từng dòng (optional).
+2. Hiển thị lại sau complete: `details[].batchId`, `batchNo`, `expiryDate`.
+3. Tra cứu tồn theo lô: `GET /products/:id/availability`.
+
+### 10.2 Phiếu xuất — chọn / trừ lô
+
+| Field | Ý nghĩa |
+|---|---|
+| `lines[].batchId` | Tùy chọn. Có → trừ đúng lô đó. Không có → hệ thống tự phân bổ. |
+
+Luồng:
+
+1. **Vào `pending_approval`** (sau bước creator / legacy submit): khóa `StockBalance` (`FOR UPDATE`), tính tồn khả dụng = `onhand − reservation active` (trừ reservation của chính phiếu này), phân bổ lô, tạo `StockReservation` **theo `batchId`** (TTL 24h).
+2. **Reject / cancel**: release reservation (`released`).
+3. **Complete**: phân bổ lại, trừ `onhand`, consume reservation, ghi ledger. Giá vốn xuất lấy từ `Batch.unitCost` của lô được pick (không có thì `"0"`).
+
+Thứ tự tự động chọn lô (khi không chỉ định `batchId`):
+
+- Sắp xếp theo **`Batch.createdAt` tăng dần** (lô tạo trước xuất trước — kiểu FIFO theo thời điểm tạo lô).
+- Lô không gắn batch dùng `StockBalance.updatedAt` làm mốc.
+- **Không** sắp theo `expiryDate` (FEFO chưa bật trong runtime).
+- **Không** chặn cứng lô đã hết hạn khi xuất (không có lỗi `EXPIRED_BATCH` hiện tại). Cảnh báo HSD dùng báo cáo `GET /reports/expiry-alert`.
+
+Nếu một dòng cần nhiều lô:
+
+- Balance / ledger / reservation được tách theo từng `batchId`.
+- `stock_issue_details.batchId` chỉ được ghi lại khi phân bổ đúng **một** lô; nếu tách nhiều lô, field trên dòng có thể vẫn `null`/giá trị cũ — UI nên dựa `availability` / ledger nếu cần chi tiết đầy đủ.
+
+Lỗi thường gặp:
+
+| Code | Khi nào |
+|---|---|
+| `STOCK_INSUFFICIENT` | Không đủ tồn khả dụng (theo lô chỉ định hoặc tổng các lô) |
+| `VERSION_CONFLICT` | Race khi trừ tồn |
+
+### 10.3 Phiếu đầu kỳ
+
+- `lines[].batchNo` / `expiryDate` tùy chọn, xử lý giống nhập lúc **post**: có `batchNo` → `ensureBatch` + ghi tồn theo lô.
+
+### 10.4 Tóm tắt cho UI
+
+| Việc | Nhập | Xuất |
+|---|---|---|
+| Client gửi | `batchNo` + `expiryDate` (optional) | `batchId` (optional) |
+| Lô được tạo | Lúc **complete** | Không tạo; chỉ pick/trừ |
+| Tự chọn lô | — | Có, theo `createdAt` ASC |
+| Chặn hết hạn | Không | Không (chỉ báo cáo cảnh báo) |
+| Giá vốn | Bình quân trên `product.averageCost` + `Batch.unitCost` | `Batch.unitCost` của lô pick |
+
+---
+
+## 11. Tích hợp Flutter
+
+### 11.1 Service layer gợi ý
 
 ```dart
 class StockDocumentApi {
@@ -537,14 +624,14 @@ class ContactApi {
 }
 ```
 
-### 10.2 Chọn người duyệt trên màn tạo phiếu
+### 11.2 Chọn người duyệt trên màn tạo phiếu
 
 1. Gọi `GET /tenant/members` → chia theo `role`
 2. Gọi `GET /tenant/contacts?relationType=delivery_person` → danh sách người giao hàng
 3. Cho phép thêm nhanh contact mới bằng `POST /tenant/contacts`
 4. Gửi phiếu kèm `deliveredBy` + `workflowAssignedApproverIds`
 
-### 10.3 UI theo trạng thái
+### 11.3 UI theo trạng thái
 
 | Status | Nút hiển thị |
 |---|---|
@@ -554,9 +641,15 @@ class ContactApi {
 | `rejected` | Tạo lại / Clone |
 | `completed` | Chỉ xem |
 
+### 11.4 UI lô / HSD
+
+- Nhập: form dòng hàng có field `batchNo`, `expiryDate` (date picker theo ngày VN).
+- Xuất: cho chọn lô từ `GET /products/:id/availability` → gửi `batchId`; hoặc để trống để backend tự pick.
+- Cảnh báo sắp hết hạn: `GET /reports/expiry-alert` (không chặn xuất).
+
 ---
 
-## 11. Mapping lỗi backend → UI Flutter
+## 12. Mapping lỗi backend → UI Flutter
 
 | Code backend | Cách hiển thị gợi ý |
 |---|---|
@@ -568,8 +661,8 @@ class ContactApi {
 | `VALIDATION_ERROR` | Highlight form field |
 | `NOT_FOUND` | Không tìm thấy dữ liệu |
 | `INVALID_STATUS_TRANSITION` | Phiếu không còn ở trạng thái hợp lệ |
-| `STOCK_INSUFFICIENT` | Không đủ tồn kho |
-| `EXPIRED_BATCH` | Lô hàng đã hết hạn |
+| `STOCK_INSUFFICIENT` | Không đủ tồn kho (theo lô hoặc tổng) |
+| `VERSION_CONFLICT` | Xung đột tồn kho, thử lại |
 | `WORKFLOW_EXISTS` | Phiếu đã có workflow |
 | `AUTHORIZATION_INVALID` | Ủy quyền ký thay không hợp lệ |
 | `IDEMPOTENCY_IN_PROGRESS` | Đang xử lý, thử lại sau |
@@ -577,7 +670,7 @@ class ContactApi {
 
 ---
 
-## 12. Checklist triển khai
+## 13. Checklist triển khai
 
 ### Backend
 

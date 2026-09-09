@@ -657,6 +657,7 @@ model Batch {
   warehouse      Warehouse?                  @relation(fields: [warehouseId], references: [id])
   supplier       Supplier?                   @relation(fields: [supplierId], references: [id])
   openingDetails StockOpeningBalanceDetail[]
+  issueDetails   StockIssueDetail[]
 
   @@unique([tenantId, productId, batchNo])
   @@index([tenantId, productId, expiryDate])
@@ -769,24 +770,25 @@ model StockReceiptDetail {
 }
 
 model StockIssue {
-  id           String    @id @default(cuid())
-  tenantId     String    @map("tenant_id")
-  code         String
-  issueDate    DateTime  @map("issue_date") @db.Date
-  warehouseId  String    @map("warehouse_id")
-  issueType    IssueType @map("issue_type")
-  customerId   String?   @map("customer_id")
-  status       DocStatus @default(draft)
-  note         String?
-  rejectReason String?   @map("reject_reason")
-  createdById  String    @map("created_by_id")
-  approvedById String?   @map("approved_by_id")
-  approvedAt   DateTime? @map("approved_at")
-  completedAt  DateTime? @map("completed_at")
-  clonedFromId String?   @map("cloned_from_id")
-  version      Int       @default(0)
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  id              String    @id @default(cuid())
+  tenantId        String    @map("tenant_id")
+  code            String
+  issueDate       DateTime  @map("issue_date") @db.Date
+  warehouseId     String    @map("warehouse_id")
+  issueType       IssueType @map("issue_type")
+  customerId      String?   @map("customer_id")
+  deliveredByName String?   @map("delivered_by_name")
+  status          DocStatus @default(draft)
+  note            String?
+  rejectReason    String?   @map("reject_reason")
+  createdById     String    @map("created_by_id")
+  approvedById    String?   @map("approved_by_id")
+  approvedAt      DateTime? @map("approved_at")
+  completedAt     DateTime? @map("completed_at")
+  clonedFromId    String?   @map("cloned_from_id")
+  version         Int       @default(0)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
 
   tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
@@ -815,6 +817,7 @@ model StockIssueDetail {
 
   issue   StockIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   product Product    @relation(fields: [productId], references: [id])
+  batch   Batch?     @relation(fields: [batchId], references: [id])
 
   @@index([issueId])
   @@index([productId])
