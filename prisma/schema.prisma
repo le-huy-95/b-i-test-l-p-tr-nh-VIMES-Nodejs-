@@ -70,6 +70,7 @@ enum DocStatus {
   completed
   rejected
   cancelled
+  out_of_stock
 }
 
 enum IssueType {
@@ -175,6 +176,8 @@ enum NotificationType {
   issue_rejected
   issue_completed
   issue_cancelled
+  issue_out_of_stock
+  issue_stock_available
 }
 
 enum NotificationTargetType {
@@ -777,18 +780,21 @@ model StockIssue {
   warehouseId     String    @map("warehouse_id")
   issueType       IssueType @map("issue_type")
   customerId      String?   @map("customer_id")
-  deliveredByName String?   @map("delivered_by_name")
-  status          DocStatus @default(draft)
-  note            String?
-  rejectReason    String?   @map("reject_reason")
-  createdById     String    @map("created_by_id")
-  approvedById    String?   @map("approved_by_id")
-  approvedAt      DateTime? @map("approved_at")
-  completedAt     DateTime? @map("completed_at")
-  clonedFromId    String?   @map("cloned_from_id")
-  version         Int       @default(0)
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+  deliveredByName          String?    @map("delivered_by_name")
+  status                   DocStatus  @default(draft)
+  note                     String?
+  rejectReason             String?    @map("reject_reason")
+  statusBeforeOutOfStock   DocStatus? @map("status_before_out_of_stock")
+  outOfStockAt             DateTime?  @map("out_of_stock_at")
+  outOfStockReason         String?    @map("out_of_stock_reason")
+  createdById              String     @map("created_by_id")
+  approvedById             String?    @map("approved_by_id")
+  approvedAt               DateTime?  @map("approved_at")
+  completedAt              DateTime?  @map("completed_at")
+  clonedFromId             String?    @map("cloned_from_id")
+  version                  Int        @default(0)
+  createdAt                DateTime   @default(now()) @map("created_at")
+  updatedAt                DateTime   @updatedAt @map("updated_at")
 
   tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   warehouse Warehouse          @relation(fields: [warehouseId], references: [id])
