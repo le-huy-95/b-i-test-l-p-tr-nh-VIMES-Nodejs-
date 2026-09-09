@@ -15,6 +15,7 @@ export const DOC_STATUSES = [
   'completed',
   'rejected',
   'cancelled',
+  'out_of_stock',
 ] as const;
 
 export type DocStatusKey = (typeof DOC_STATUSES)[number];
@@ -28,6 +29,7 @@ export function emptyStatusCounts(): StatusCounts {
     completed: 0,
     rejected: 0,
     cancelled: 0,
+    out_of_stock: 0,
   };
 }
 

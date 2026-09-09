@@ -619,6 +619,103 @@ export class StockIssueService {
       throw err;
     }
   }
+
+  /**
+   * Sau nhập kho tăng tồn: mở khóa phiếu xuất đang out_of_stock nếu đủ hàng toàn bộ dòng.
+   * Restore statusBeforeOutOfStock; nếu pending_approval thì tạo reservation.
+   */
+  async tryResolveOutOfStockIssues(
+    tenantId: string,
+    warehouseId: string,
+    productIds: string[],
+    actor: StockDocActor,
+  ) {
+    if (productIds.length === 0) return [];
+
+    const resolved: Array<{ id: string; status: string }> = [];
+
+    const candidates = await this.db.stockIssue.findMany({
+      where: {
+        tenantId,
+        warehouseId,
+        status: "out_of_stock",
+        details: { some: { productId: { in: productIds } } },
+      },
+      include: { details: true },
+    });
+
+    for (const candidate of candidates) {
+      const target =
+        candidate.statusBeforeOutOfStock === "approved" ||
+        candidate.statusBeforeOutOfStock === "pending_approval"
+          ? candidate.statusBeforeOutOfStock
+          : null;
+      if (!target) continue;
+
+      try {
+        const updated = await this.db.$transaction(
+          async (trx: Prisma.TransactionClient) => {
+            const locked = await trx.stockIssue.findFirst({
+              where: {
+                id: candidate.id,
+                tenantId,
+                status: "out_of_stock",
+              },
+              include: { details: true },
+            });
+            if (!locked) return null;
+
+            const allocations = await allocateIssueLines(
+              trx,
+              tenantId,
+              warehouseId,
+              locked.details,
+              {
+                excludeRef: { docType: "stock_issue", docId: locked.id },
+              },
+            );
+
+            if (target === "pending_approval") {
+              const expiresAt = new Date(Date.now() + 24 * 3600_000);
+              const reservations = mergeReservations(
+                tenantId,
+                warehouseId,
+                locked.id,
+                expiresAt,
+                allocations,
+              );
+              await trx.stockReservation.createMany({ data: reservations });
+            }
+
+            return trx.stockIssue.update({
+              where: { id: locked.id },
+              data: {
+                status: target,
+                statusBeforeOutOfStock: null,
+                outOfStockAt: null,
+                outOfStockReason: null,
+              },
+              include: { details: true },
+            });
+          },
+        );
+
+        if (!updated) continue;
+        await notifyIssueStockAvailable(tenantId, updated, actor);
+        resolved.push({ id: updated.id, status: updated.status });
+      } catch (err) {
+        if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (resolved.length > 0) {
+      await cacheInvalidationService.invalidateStockDocuments(tenantId);
+    }
+    return resolved;
+  }
 }
 
 function formatOutOfStockReason(err: AppError): string {

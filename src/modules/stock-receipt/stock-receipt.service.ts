@@ -41,8 +41,10 @@ import {
   stockDocListCacheVisibilityKey,
   type StockDocVisibilityActor,
 } from "../stock-balance/stock-doc-visibility";
+import { assertStockDocEditableByCreator } from "../stock-balance/stock-doc-edit-lock";
 
 const CACHE_PREFIX = "list:stock-receipts";
+const DETAIL_CACHE_PREFIX = "detail:stock-receipts";
 
 export class StockReceiptService {
   constructor(
@@ -91,19 +93,25 @@ export class StockReceiptService {
     return withVnTimestamps(result);
   }
 
-  /** Chi tiết 1 phiếu nhập kèm dòng hàng */
+  /** Chi tiết 1 phiếu nhập kèm dòng hàng — Redis cache-aside, invalidate khi chứng từ đổi */
   async get(tenantId: string, id: string, actor: StockDocVisibilityActor) {
-    const visibility = await buildStockDocumentVisibilityWhere(
-      this.db,
-      tenantId,
-      "stock_receipt",
-      actor,
-    );
-    const doc = await this.db.stockReceipt.findFirst({
-      where: { id, tenantId, ...visibility },
-      include: { details: true, supplier: true, warehouse: true },
+    const scope = resolveStockDocVisibilityScope(actor.role);
+    const visibilityKey = stockDocListCacheVisibilityKey(scope, actor.userId);
+    const cacheKey = `${DETAIL_CACHE_PREFIX}:${tenantId}:${visibilityKey}:${id}`;
+    const doc = await this.cache.getOrSet(cacheKey, async () => {
+      const visibility = await buildStockDocumentVisibilityWhere(
+        this.db,
+        tenantId,
+        "stock_receipt",
+        actor,
+      );
+      const found = await this.db.stockReceipt.findFirst({
+        where: { id, tenantId, ...visibility },
+        include: { details: true, supplier: true, warehouse: true },
+      });
+      if (!found) throw new AppError("NOT_FOUND", 404, "Receipt not found");
+      return found;
     });
-    if (!doc) throw new AppError("NOT_FOUND", 404, "Receipt not found");
     return withVnTimestamps(doc);
   }
 
@@ -117,7 +125,7 @@ export class StockReceiptService {
     return doc;
   }
 
-  /** Tạo phiếu nhập mới ở trạng thái draft, sinh mã tự động */
+  /** Tạo phiếu nhập: draft + workflow in_review (bỏ bước gửi) */
   async create(tenantId: string, userId: string, input: unknown) {
     const data = createStockReceiptSchema.parse(input);
     assertSupportedReceiptType(data.receiptType);
@@ -145,30 +153,50 @@ export class StockReceiptService {
       include: { details: true },
     });
 
+    const actor = { userId, name: undefined };
     const adapter = getDocumentAdapter("stock_receipt");
     await documentWorkflowService.initWorkflow(
       tenantId,
       "stock_receipt",
       result.id,
-      { userId, name: undefined },
+      actor,
       adapter,
       data.workflowAssignedApproverIds,
     );
+    await documentWorkflowService.startReviewOnCreate(
+      tenantId,
+      "stock_receipt",
+      result.id,
+      actor,
+      adapter,
+    );
 
+    const created = await this.requireById(tenantId, result.id);
+    const workflow = await documentWorkflowService.getWorkflow(
+      tenantId,
+      "stock_receipt",
+      result.id,
+    );
+    await notifyReceiptSubmitted(tenantId, created, actor);
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return withVnTimestamps(result);
+    return withVnTimestamps({
+      ...created,
+      workflowStatus: workflow.status,
+      currentStepCode: workflow.currentStepCode,
+    });
   }
 
-  /** Cập nhật phiếu draft — không cho sửa khi đã submit/duyệt */
-  async update(tenantId: string, id: string, input: unknown) {
+  /** Cập nhật phiếu draft — chỉ người tạo, khi chưa khóa bởi bước duyệt sau creator */
+  async update(tenantId: string, id: string, userId: string, input: unknown) {
     const doc = await this.requireById(tenantId, id);
-    if (doc.status !== "draft") {
-      throw new AppError(
-        "INVALID_STATUS_TRANSITION",
-        409,
-        "Only draft receipts can be updated",
-      );
-    }
+    await assertStockDocEditableByCreator(
+      this.db,
+      tenantId,
+      "stock_receipt",
+      id,
+      doc,
+      userId,
+    );
     const data = updateStockReceiptSchema.parse(input);
     assertSupportedReceiptType(data.receiptType);
     await assertTrackedReceiptLines(this.db, tenantId, data.lines);
@@ -223,15 +251,31 @@ export class StockReceiptService {
     return result;
   }
 
-  /** Gửi duyệt — khởi tạo workflow và chuyển sang pending_approval */
-  async submit(tenantId: string, id: string, actor: StockDocActor) {
+  /** @deprecated Create đã start review — không gọi submit nữa */
+  async submit(_tenantId: string, _id: string, _actor: StockDocActor) {
+    throw new AppError(
+      "SUBMIT_DEPRECATED",
+      410,
+      "Submit is deprecated; documents enter review on create",
+    );
+  }
+
+  /** draft → pending_approval (sau duyệt bước đầu sau creator, hoặc legacy workflow submit) */
+  async markPendingApproval(
+    tenantId: string,
+    id: string,
+    _actor: StockDocActor,
+  ) {
+    const doc = await this.requireById(tenantId, id);
+    if (doc.status === "pending_approval") {
+      return withVnTimestamps(doc);
+    }
     const result = await this.transition(
       tenantId,
       id,
       ["draft"],
       "pending_approval",
     );
-    await notifyReceiptSubmitted(tenantId, result, actor);
     return withVnTimestamps(result);
   }
 
@@ -261,7 +305,7 @@ export class StockReceiptService {
     const result = await this.transition(
       tenantId,
       id,
-      ["pending_approval"],
+      ["draft", "pending_approval"],
       "rejected",
       {
         rejectReason: reason,
@@ -376,6 +420,22 @@ export class StockReceiptService {
         return updated;
       });
       await notifyReceiptCompleted(tenantId, result, actor);
+      const details = result.details ?? [];
+      const productIds = [...new Set(details.map((line) => line.productId))];
+      const warehouseId =
+        (result as { warehouseId?: string }).warehouseId ??
+        (result as { warehouse_id?: string }).warehouse_id;
+      if (warehouseId && productIds.length > 0) {
+        const { stockIssueService } = await import(
+          "../stock-issue/stock-issue.service"
+        );
+        await stockIssueService.tryResolveOutOfStockIssues(
+          tenantId,
+          warehouseId,
+          productIds,
+          actor,
+        );
+      }
       return withVnTimestamps(result);
     } catch (err) {
       if (err instanceof AppError && err.code === "IDEMPOTENT_SKIP") {
