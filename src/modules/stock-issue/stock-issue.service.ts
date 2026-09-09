@@ -29,7 +29,9 @@ import {
   notifyIssueApproved,
   notifyIssueCancelled,
   notifyIssueCompleted,
+  notifyIssueOutOfStock,
   notifyIssueRejected,
+  notifyIssueStockAvailable,
   notifyIssueSubmitted,
 } from "../../shared/notifications/stock-doc-notify";
 import { documentWorkflowService } from "../document-workflow/document-workflow.service";
@@ -305,15 +307,32 @@ export class StockIssueService {
         });
         if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
 
-        const allocations = await allocateIssueLines(
-          trx,
-          tenantId,
-          warehouseId,
-          issue.details,
-          {
-            excludeRef: { docType: "stock_issue", docId: id },
-          },
-        );
+        let allocations;
+        try {
+          allocations = await allocateIssueLines(
+            trx,
+            tenantId,
+            warehouseId,
+            issue.details,
+            {
+              excludeRef: { docType: "stock_issue", docId: id },
+            },
+          );
+        } catch (err) {
+          if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
+            return trx.stockIssue.update({
+              where: { id },
+              data: {
+                status: "out_of_stock",
+                statusBeforeOutOfStock: "pending_approval",
+                outOfStockAt: new Date(),
+                outOfStockReason: formatOutOfStockReason(err),
+              },
+              include: { details: true },
+            });
+          }
+          throw err;
+        }
 
         const expiresAt = new Date(Date.now() + 24 * 3600_000);
         const reservations = mergeReservations(
@@ -333,6 +352,9 @@ export class StockIssueService {
       },
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
+    if (result.status === "out_of_stock") {
+      await notifyIssueOutOfStock(tenantId, result, _actor, result.outOfStockReason);
+    }
     return withVnTimestamps(result);
   }
 
@@ -370,7 +392,9 @@ export class StockIssueService {
         });
         if (
           !issue ||
-          (issue.status !== "pending_approval" && issue.status !== "draft")
+          (issue.status !== "pending_approval" &&
+            issue.status !== "draft" &&
+            issue.status !== "out_of_stock")
         ) {
           throw new AppError(
             "INVALID_STATUS_TRANSITION",
@@ -384,7 +408,13 @@ export class StockIssueService {
         });
         return trx.stockIssue.update({
           where: { id },
-          data: { status: "rejected", rejectReason: reason },
+          data: {
+            status: "rejected",
+            rejectReason: reason,
+            statusBeforeOutOfStock: null,
+            outOfStockAt: null,
+            outOfStockReason: null,
+          },
           include: { details: true },
         });
       },
@@ -403,7 +433,9 @@ export class StockIssueService {
         });
         if (
           !issue ||
-          !["draft", "pending_approval", "approved"].includes(issue.status)
+          !["draft", "pending_approval", "approved", "out_of_stock"].includes(
+            issue.status,
+          )
         ) {
           throw new AppError("INVALID_STATUS_TRANSITION", 409, "Cannot cancel");
         }
@@ -413,7 +445,12 @@ export class StockIssueService {
         });
         return trx.stockIssue.update({
           where: { id },
-          data: { status: "cancelled" },
+          data: {
+            status: "cancelled",
+            statusBeforeOutOfStock: null,
+            outOfStockAt: null,
+            outOfStockReason: null,
+          },
           include: { details: true },
         });
       },
@@ -475,6 +512,13 @@ export class StockIssueService {
           if (issue.status === "completed") {
             throw new AppError("IDEMPOTENT_SKIP", 200, "Phiếu đã hoàn tất");
           }
+          if (issue.status === "out_of_stock") {
+            throw new AppError(
+              "INVALID_STATUS_TRANSITION",
+              409,
+              `Cannot complete from ${issue.status}`,
+            );
+          }
           if (issue.status !== "approved") {
             throw new AppError(
               "INVALID_STATUS_TRANSITION",
@@ -486,13 +530,30 @@ export class StockIssueService {
           const details = await trx.stockIssueDetail.findMany({
             where: { issueId: id },
           });
-          const allocations = await allocateIssueLines(
-            trx,
-            tenantId,
-            issue.warehouseId,
-            details,
-            { excludeRef: { docType: "stock_issue", docId: id } },
-          );
+          let allocations;
+          try {
+            allocations = await allocateIssueLines(
+              trx,
+              tenantId,
+              issue.warehouseId,
+              details,
+              { excludeRef: { docType: "stock_issue", docId: id } },
+            );
+          } catch (err) {
+            if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
+              return trx.stockIssue.update({
+                where: { id },
+                data: {
+                  status: "out_of_stock",
+                  statusBeforeOutOfStock: "approved",
+                  outOfStockAt: new Date(),
+                  outOfStockReason: formatOutOfStockReason(err),
+                },
+                include: { details: true },
+              });
+            }
+            throw err;
+          }
 
           const changes: QtyChange[] = allocations.map((item) => ({
             tenantId,
@@ -540,6 +601,15 @@ export class StockIssueService {
         },
       );
       await cacheInvalidationService.invalidateStockMutations(tenantId);
+      if (result.status === "out_of_stock") {
+        await notifyIssueOutOfStock(
+          tenantId,
+          result,
+          actor,
+          result.outOfStockReason,
+        );
+        return withVnTimestamps(result);
+      }
       await notifyIssueCompleted(tenantId, result, actor);
       return withVnTimestamps(result);
     } catch (err) {
@@ -548,6 +618,14 @@ export class StockIssueService {
       }
       throw err;
     }
+  }
+}
+
+function formatOutOfStockReason(err: AppError): string {
+  try {
+    return JSON.stringify(err.details ?? err.message);
+  } catch {
+    return err.message;
   }
 }
 
