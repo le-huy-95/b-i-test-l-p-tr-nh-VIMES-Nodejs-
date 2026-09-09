@@ -80,6 +80,7 @@ Idempotency-Key: 7d2bb3a5-4f24-4e2f-a4c6-2d7a3e8c1c35
 | `rejected` | Bị từ chối |
 | `cancelled` | Đã hủy |
 | `completed` | Đã ghi nhận tồn kho |
+| `out_of_stock` | **Chỉ phiếu xuất** — thiếu tồn lúc reserve/xuất; chờ nhập kho đủ hàng |
 
 ### Chuyển trạng thái hợp lệ (xuất/nhập)
 
@@ -88,7 +89,17 @@ draft ──submit──► pending_approval ──approve──► approved ─
                      │                             │
                      ├──reject──► rejected         └──cancel──► cancelled
                      └──cancel──► cancelled
+
+(Phiếu xuất) draft/approved ──thiếu tồn──► out_of_stock
+  └── khi nhập kho đủ──► pending_approval | approved (status đích)
 ```
+
+### Thông báo hết hàng (phiếu xuất)
+
+| Event | Khi nào | Người nhận |
+|---|---|---|
+| `ISSUE_OUT_OF_STOCK` / `issue_out_of_stock` | Soft-fail reserve hoặc complete | admin, accountant + creator |
+| `ISSUE_STOCK_AVAILABLE` / `issue_stock_available` | Nhập kho đủ → mở khóa phiếu | cùng policy |
 
 ---
 
