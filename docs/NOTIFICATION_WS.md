@@ -49,7 +49,8 @@ Nếu chưa có Kafka, đặt `KAFKA_ENABLED=false` — API vẫn chạy bình t
 
 ## REST API (port 3001)
 
-Base URL: `http://localhost:3001/api/v1`
+Public (Cloudflare Tunnel): `https://api.kimbap.io.vn/api/v1`  
+Local: `http://localhost:3001/api/v1`
 
 Auth: `Authorization: Bearer <accessToken>` (cùng JWT với Business API)
 
@@ -151,7 +152,8 @@ Hoặc mark all:
 
 ## WebSocket
 
-URL: `ws://localhost:3001/notifications?token=<accessToken>`
+URL (public): `wss://api.kimbap.io.vn/notifications?token=<accessToken>`  
+URL (local): `ws://localhost:3001/notifications?token=<accessToken>`
 
 ### Client → Server
 
@@ -190,8 +192,8 @@ Notification mới:
 | App resume | Reconnect WS + sync unread-count |
 
 ```dart
-const notifApiBase = 'http://localhost:3001/api/v1';
-const wsUrl = 'ws://localhost:3001/notifications';
+const notifApiBase = 'https://api.kimbap.io.vn/api/v1';
+const wsUrl = 'wss://api.kimbap.io.vn/notifications';
 ```
 
 ## Event types (phase 1)

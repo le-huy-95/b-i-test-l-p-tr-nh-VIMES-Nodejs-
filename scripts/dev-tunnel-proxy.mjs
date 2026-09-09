@@ -1,6 +1,8 @@
 /**
- * Dev reverse proxy: one port → API (3004) + notification-ws (3001)
- * for a single ngrok tunnel. Zero dependencies.
+ * Dev reverse proxy: one port → API (3004) + notification-ws (3001).
+ * Fallback when Cloudflare Tunnel path routing for WS is unavailable.
+ * Point tunnel hostname api.kimbap.io.vn → http://localhost:3080
+ * Zero dependencies.
  */
 import http from "node:http";
 import { URL } from "node:url";
@@ -80,6 +82,6 @@ const server = http.createServer(proxyHttp);
 server.on("upgrade", proxyWs);
 server.listen(LISTEN, () => {
   console.log(
-    `Dev proxy on http://localhost:${LISTEN} (API→${API.origin}, WS→${WS.origin})`,
+    `Dev tunnel proxy on http://localhost:${LISTEN} (API→${API.origin}, WS→${WS.origin})`,
   );
 });

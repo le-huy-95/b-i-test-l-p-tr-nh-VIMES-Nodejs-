@@ -9,6 +9,7 @@ import { prisma } from "../../infra/prisma";
 import { AppError } from "../../utils/app-error";
 import { generateNextCode } from "../../utils/numbering";
 import { d, toDecimalString } from "../../utils/decimal";
+import { toVnDate, withVnTimestamps } from "../../utils/vn-time";
 import { buildStockIssueDetails } from "../stock-balance/stock-document-line.helpers";
 import type { StockPostingPort } from "../stock-balance/stock-posting.port";
 import { stockPostingService } from "../stock-balance/stock-posting.service";
@@ -34,6 +35,12 @@ import {
 import { documentWorkflowService } from "../document-workflow/document-workflow.service";
 import { getDocumentAdapter } from "../document-workflow/adapters/stock-document-adapter";
 import { enqueueStockMutationCompletion } from "../../infra/stock-mutation-queue";
+import {
+  buildStockDocumentVisibilityWhere,
+  resolveStockDocVisibilityScope,
+  stockDocListCacheVisibilityKey,
+  type StockDocVisibilityActor,
+} from "../stock-balance/stock-doc-visibility";
 
 const CACHE_PREFIX = "list:stock-issues";
 
@@ -44,23 +51,31 @@ export class StockIssueService {
     private readonly cache: ListCache = listCache,
   ) {}
 
-  /** Danh sách phiếu xuất — cache Redis */
-  async list(tenantId: string, query?: unknown) {
+  /** Danh sách phiếu xuất — cache Redis, lọc theo role/user */
+  async list(tenantId: string, actor: StockDocVisibilityActor, query?: unknown) {
+    const scope = resolveStockDocVisibilityScope(actor.role);
+    const visibilityKey = stockDocListCacheVisibilityKey(scope, actor.userId);
     const cacheSuffix =
       !query || Object.keys(query as object).length === 0
         ? "all"
         : JSON.stringify(paginationSchema.parse(query));
-    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    return this.cache.getOrSet(cacheKey, async () => {
+    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${visibilityKey}:${cacheSuffix}`;
+    const result = await this.cache.getOrSet(cacheKey, async () => {
+      const visibility = await buildStockDocumentVisibilityWhere(
+        this.db,
+        tenantId,
+        "stock_issue",
+        actor,
+      );
+      const where = { tenantId, ...visibility };
       if (!query || Object.keys(query as object).length === 0) {
         return this.db.stockIssue.findMany({
-          where: { tenantId },
+          where,
           include: { details: true },
           orderBy: { createdAt: "desc" },
         });
       }
       const { page, limit } = paginationSchema.parse(query);
-      const where = { tenantId };
       const [data, total] = await Promise.all([
         this.db.stockIssue.findMany({
           where,
@@ -73,10 +88,27 @@ export class StockIssueService {
       ]);
       return paginate(data, page, limit, total);
     });
+    return withVnTimestamps(result);
   }
 
   /** Chi tiết phiếu xuất kèm dòng hàng */
-  async get(tenantId: string, id: string) {
+  async get(tenantId: string, id: string, actor: StockDocVisibilityActor) {
+    const visibility = await buildStockDocumentVisibilityWhere(
+      this.db,
+      tenantId,
+      "stock_issue",
+      actor,
+    );
+    const doc = await this.db.stockIssue.findFirst({
+      where: { id, tenantId, ...visibility },
+      include: { details: true, customer: true, warehouse: true },
+    });
+    if (!doc) throw new AppError("NOT_FOUND", 404, "Issue not found");
+    return withVnTimestamps(doc);
+  }
+
+  /** Load phiếu theo id trong tenant — dùng nội bộ cho mutation (đã có role guard) */
+  private async requireById(tenantId: string, id: string) {
     const doc = await this.db.stockIssue.findFirst({
       where: { id, tenantId },
       include: { details: true, customer: true, warehouse: true },
@@ -106,7 +138,7 @@ export class StockIssueService {
         warehouseId: data.warehouseId,
         issueType: data.issueType,
         customerId: data.customerId,
-        issueDate: new Date(data.issueDate),
+        issueDate: toVnDate(data.issueDate),
         note: data.note,
         createdById: userId,
         details: { create: details },
@@ -125,12 +157,12 @@ export class StockIssueService {
     );
 
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Cập nhật phiếu xuất draft */
   async update(tenantId: string, id: string, input: unknown) {
-    const doc = await this.get(tenantId, id);
+    const doc = await this.requireById(tenantId, id);
     if (doc.status !== "draft") {
       throw new AppError(
         "INVALID_STATUS_TRANSITION",
@@ -156,7 +188,7 @@ export class StockIssueService {
             warehouseId: data.warehouseId,
             issueType: data.issueType,
             customerId: data.customerId,
-            issueDate: new Date(data.issueDate),
+            issueDate: toVnDate(data.issueDate),
             note: data.note,
             version: { increment: 1 },
             details: { create: details },
@@ -166,7 +198,7 @@ export class StockIssueService {
       },
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Gửi duyệt — reserve tồn kho và khởi tạo workflow */
@@ -233,12 +265,12 @@ export class StockIssueService {
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
     await notifyIssueSubmitted(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Duyệt phiếu xuất qua workflow */
   async approve(tenantId: string, id: string, actor: StockDocActor) {
-    const issue = await this.get(tenantId, id);
+    const issue = await this.requireById(tenantId, id);
     if (issue.status !== "pending_approval") {
       throw new AppError("INVALID_STATUS_TRANSITION", 409, "Invalid status");
     }
@@ -253,7 +285,7 @@ export class StockIssueService {
     });
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
     await notifyIssueApproved(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Từ chối — giải phóng reservation đã giữ */
@@ -288,7 +320,7 @@ export class StockIssueService {
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
     await notifyIssueRejected(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Hủy phiếu xuất và giải phóng tồn đã reserve */
@@ -317,12 +349,12 @@ export class StockIssueService {
     );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
     await notifyIssueCancelled(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Hoàn thành bất đồng bộ — trừ tồn qua stock-mutation-queue */
   async complete(tenantId: string, id: string, actor: StockDocActor) {
-    const issue = await this.get(tenantId, id);
+    const issue = await this.requireById(tenantId, id);
     if (issue.status === "completed") {
       return { queued: false, jobId: null, status: "completed" };
     }
@@ -438,10 +470,10 @@ export class StockIssueService {
       );
       await cacheInvalidationService.invalidateStockMutations(tenantId);
       await notifyIssueCompleted(tenantId, result, actor);
-      return result;
+      return withVnTimestamps(result);
     } catch (err) {
       if (err instanceof AppError && err.code === "IDEMPOTENT_SKIP") {
-        return this.get(tenantId, id);
+        return withVnTimestamps(await this.requireById(tenantId, id));
       }
       throw err;
     }

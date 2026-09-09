@@ -4,9 +4,9 @@
   "description": "Backend API with Node.js, Express, TypeScript and PostgreSQL",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "dev:ws": "tsx watch services/notification-ws/src/index.ts",
-    "start:ws": "tsx services/notification-ws/src/index.ts",
+    "dev": "env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy tsx watch src/index.ts",
+    "dev:ws": "env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy tsx watch services/notification-ws/src/index.ts",
+    "start:ws": "env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy tsx services/notification-ws/src/index.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:ws\"",
     "build": "prisma generate && tsc && npm run copy:templates",
     "copy:templates": "mkdir -p dist/services/email/templates && cp -r src/services/email/templates/*.hbs dist/services/email/templates/",

@@ -1,8 +1,8 @@
 # Hướng dẫn frontend dùng WebSocket cho notification
 
 > Backend notification-ws hiện **hỗ trợ song song 2 giao thức**:
-> - raw WebSocket: `ws://<host>:3001/notifications?token=<ACCESS_TOKEN>`
-> - Socket.IO: `ws://<host>:3001/socket.io/` (hoặc `http://<host>:3001/socket.io` qua socket.io-client)
+> - raw WebSocket: `wss://api.kimbap.io.vn/notifications?token=<ACCESS_TOKEN>` (local: `ws://localhost:3001/notifications?...`)
+> - Socket.IO: `wss://api.kimbap.io.vn/socket.io/` (local: `ws://localhost:3001/socket.io/`)
 
 ---
 
@@ -10,8 +10,9 @@
 
 | Cách | URL | Ghi chú |
 |------|-----|---------|
-| Raw WebSocket (`ws`) | `ws://<host>:3001/notifications?token=<ACCESS_TOKEN>` | Khuyến nghị |
-| Socket.IO client | `http://<host>:3001` + `path: '/socket.io'` | Client gửi `token` qua `query` hoặc `auth` |
+| Raw WebSocket (`ws`) | `wss://api.kimbap.io.vn/notifications?token=<ACCESS_TOKEN>` | Khuyến nghị (tunnel) |
+| Socket.IO client | `https://api.kimbap.io.vn` + `path: '/socket.io'` | Client gửi `token` qua `query` hoặc `auth` |
+| Local (không tunnel) | `ws://localhost:3001/...` | Dev máy local |
 
 Cả hai đều dùng **cùng access token**, cùng format message bên dưới.
 
@@ -105,7 +106,7 @@ class NotificationWsClient {
   Future<void> connect() async {
     if (_disposed) return;
 
-    final uri = Uri.parse('ws://localhost:3001/notifications?token=$token');
+    final uri = Uri.parse('wss://api.kimbap.io.vn/notifications?token=$token');
 
     try {
       _socket = await WebSocket.connect(uri.toString());

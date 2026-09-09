@@ -98,7 +98,7 @@ describe("stock receipt service", () => {
       await import("../../src/modules/stock-receipt/stock-receipt.service");
 
     const actor = { userId: "user-1", name: "Tester" };
-    const result = await stockReceiptService.complete(
+    const result = await stockReceiptService.completeNow(
       "tenant-1",
       "receipt-1",
       actor,
@@ -211,7 +211,7 @@ describe("stock receipt service", () => {
 
     const { stockReceiptService } = await import("../../src/modules/stock-receipt/stock-receipt.service");
     const actor = { userId: "user-1", name: "Tester" };
-    await stockReceiptService.complete("tenant-1", "receipt-1", actor);
+    await stockReceiptService.completeNow("tenant-1", "receipt-1", actor);
 
     expect(mockApply).toHaveBeenCalledWith(
       expect.objectContaining({

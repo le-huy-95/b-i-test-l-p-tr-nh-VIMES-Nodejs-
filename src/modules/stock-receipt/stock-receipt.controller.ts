@@ -10,7 +10,11 @@ import { requestActor } from '../../shared/notifications/request-actor';
 
 export class StockReceiptController {
   list = async (req: Request, res: Response) => {
-    const data = await stockReceiptService.list(req.tenant!.id, req.query);
+    const data = await stockReceiptService.list(
+      req.tenant!.id,
+      { userId: req.user!.id, role: req.tenant!.role },
+      req.query,
+    );
     res.json({ success: true, data });
   };
 
@@ -20,7 +24,10 @@ export class StockReceiptController {
   };
 
   get = async (req: Request, res: Response) => {
-    const data = await stockReceiptService.get(req.tenant!.id, req.params.id as string);
+    const data = await stockReceiptService.get(req.tenant!.id, req.params.id as string, {
+      userId: req.user!.id,
+      role: req.tenant!.role,
+    });
     res.json({ success: true, data });
   };
 

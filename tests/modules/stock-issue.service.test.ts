@@ -141,7 +141,7 @@ describe('stock issue service', () => {
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
 
     const actor = { userId: 'user-1', name: 'Tester' };
-    const result = await stockIssueService.complete('tenant-1', 'issue-1', actor);
+    const result = await stockIssueService.completeNow('tenant-1', 'issue-1', actor);
 
     expect(mockApply).toHaveBeenCalledWith(
       {
@@ -229,7 +229,7 @@ describe('stock issue service', () => {
 
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
     const actor = { userId: 'user-1', name: 'Tester' };
-    await stockIssueService.complete('tenant-1', 'issue-1', actor);
+    await stockIssueService.completeNow('tenant-1', 'issue-1', actor);
 
     expect(mockApply).toHaveBeenCalledWith(
       {

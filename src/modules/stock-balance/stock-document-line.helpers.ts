@@ -6,6 +6,7 @@
 import type { Prisma, PrismaClient } from '../../infra/prisma-types';
 import { AppError } from '../../utils/app-error';
 import { d, toDecimalString } from '../../utils/decimal';
+import { toVnDate } from '../../utils/vn-time';
 import { ensureBatch } from './batch.service';
 
 export interface StockReceiptInputLine {
@@ -133,7 +134,7 @@ export async function buildStockReceiptDetails(
       unitPrice: line.unitPrice,
       lineAmount,
       batchNo: line.batchNo,
-      expiryDate: line.expiryDate ? new Date(line.expiryDate) : undefined,
+      expiryDate: line.expiryDate ? toVnDate(line.expiryDate) : undefined,
     });
   }
 

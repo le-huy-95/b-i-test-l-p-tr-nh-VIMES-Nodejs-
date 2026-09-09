@@ -18,7 +18,11 @@ import { stockOpeningService } from './stock-opening.service';
 export class StockOpeningController {
   /** Liệt kê phiếu tồn đầu kỳ theo tenant, hỗ trợ phân trang qua query string */
   list = async (req: Request, res: Response) => {
-    const data = await stockOpeningService.list(req.tenant!.id, req.query);
+    const data = await stockOpeningService.list(
+      req.tenant!.id,
+      { userId: req.user!.id, role: req.tenant!.role },
+      req.query,
+    );
     res.json({ success: true, data });
   };
 

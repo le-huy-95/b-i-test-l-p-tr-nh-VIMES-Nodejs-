@@ -10,6 +10,7 @@
  * 6. Đăng ký graceful shutdown khi nhận SIGINT / SIGTERM
  */
 import http from 'http';
+import { clearLocalhostProxyEnv } from '../../../src/config/clear-localhost-proxy';
 import { env } from '../../../src/config/env';
 import { connectDatabase, closeDatabase } from '../../../src/infra/prisma';
 import { connectRedis, closeRedis, getRedis } from '../../../src/infra/redis';
@@ -18,6 +19,8 @@ import { startNotificationConsumer } from './kafka/consumer';
 import { attachWebSocketServer } from './ws/server';
 import { attachSocketIoServer } from './ws/socketio-server';
 import { NotificationPushRelay } from './ws/push-relay';
+
+clearLocalhostProxyEnv();
 
 /**
  * Khởi động toàn bộ vòng đời service: infra → HTTP/WS → consumer → listen.

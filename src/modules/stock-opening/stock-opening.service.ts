@@ -9,6 +9,7 @@ import { prisma } from "../../infra/prisma";
 import { AppError } from "../../utils/app-error";
 import { generateNextCode } from "../../utils/numbering";
 import { toDecimalString } from "../../utils/decimal";
+import { toVnDate, withVnTimestamps } from "../../utils/vn-time";
 import { buildStockOpeningChanges } from "../stock-balance/stock-document-line.helpers";
 import type { StockPostingPort } from "../stock-balance/stock-posting.port";
 import { stockPostingService } from "../stock-balance/stock-posting.service";
@@ -19,6 +20,12 @@ import type { ListCache } from "../common/list-cache.port";
 import { cacheInvalidationService } from "../../infra/cache-invalidation";
 import { documentWorkflowService } from "../document-workflow/document-workflow.service";
 import { getDocumentAdapter } from "../document-workflow/adapters/stock-document-adapter";
+import {
+  buildStockDocumentVisibilityWhere,
+  resolveStockDocVisibilityScope,
+  stockDocListCacheVisibilityKey,
+  type StockDocVisibilityActor,
+} from "../stock-balance/stock-doc-visibility";
 
 const CACHE_PREFIX = "list:stock-openings";
 
@@ -50,7 +57,7 @@ export class StockOpeningService {
         tenantId,
         code,
         warehouseId: data.warehouseId,
-        effectiveDate: new Date(data.effectiveDate),
+        effectiveDate: toVnDate(data.effectiveDate),
         note: data.note,
         createdById: userId,
         details: {
@@ -59,7 +66,7 @@ export class StockOpeningService {
             qtyBaseUnit: toDecimalString(l.qty, 4),
             unitCost: toDecimalString(l.unitCost, 4),
             batchNo: l.batchNo,
-            expiryDate: l.expiryDate ? new Date(l.expiryDate) : undefined,
+            expiryDate: l.expiryDate ? toVnDate(l.expiryDate) : undefined,
           })),
         },
       },
@@ -77,7 +84,7 @@ export class StockOpeningService {
     );
 
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return created;
+    return withVnTimestamps(created);
   }
 
   async post(tenantId: string, id: string, userId: string) {
@@ -149,25 +156,33 @@ export class StockOpeningService {
       });
     });
     await cacheInvalidationService.invalidateStockMutations(tenantId);
-    return result;
+    return withVnTimestamps(result);
   }
 
-  async list(tenantId: string, query?: unknown) {
+  async list(tenantId: string, actor: StockDocVisibilityActor, query?: unknown) {
+    const scope = resolveStockDocVisibilityScope(actor.role);
+    const visibilityKey = stockDocListCacheVisibilityKey(scope, actor.userId);
     const cacheSuffix =
       !query || Object.keys(query as object).length === 0
         ? "all"
         : JSON.stringify(paginationSchema.parse(query));
-    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    return this.cache.getOrSet(cacheKey, async () => {
+    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${visibilityKey}:${cacheSuffix}`;
+    const result = await this.cache.getOrSet(cacheKey, async () => {
+      const visibility = await buildStockDocumentVisibilityWhere(
+        this.db,
+        tenantId,
+        "stock_opening",
+        actor,
+      );
+      const where = { tenantId, ...visibility };
       if (!query || Object.keys(query as object).length === 0) {
         return this.db.stockOpeningBalance.findMany({
-          where: { tenantId },
+          where,
           include: { details: true },
           orderBy: { createdAt: "desc" },
         });
       }
       const { page, limit } = paginationSchema.parse(query);
-      const where = { tenantId };
       const [data, total] = await Promise.all([
         this.db.stockOpeningBalance.findMany({
           where,
@@ -180,6 +195,7 @@ export class StockOpeningService {
       ]);
       return paginate(data, page, limit, total);
     });
+    return withVnTimestamps(result);
   }
 }
 

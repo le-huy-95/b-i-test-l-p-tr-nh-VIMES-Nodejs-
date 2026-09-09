@@ -10,6 +10,7 @@
  * List/report cache dùng lazy delete trên Redis shared — không cần stream consumer.
  */
 import app from "./app";
+import { clearLocalhostProxyEnv } from "./config/clear-localhost-proxy";
 import { config, isSmtpConfigured } from "./config/env";
 import { connectDatabase, closeDatabase } from "./infra/prisma";
 import { connectRedis, closeRedis } from "./infra/redis";
@@ -20,6 +21,9 @@ import {
   startStockMutationWorker,
   stopStockMutationWorker,
 } from "./infra/stock-mutation-queue";
+
+// Gỡ Clash/Surge localhost proxy trước khi mở kết nối ngoài (Google ID token / SMTP)
+clearLocalhostProxyEnv();
 
 // Timer dọn dẹp bản ghi idempotency hết hạn — chạy mỗi 1 giờ
 let cleanupIdempotencyTimer: NodeJS.Timeout | null = null;

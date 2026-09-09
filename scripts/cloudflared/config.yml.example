@@ -1,11 +1,21 @@
 # Copy to ~/.cloudflared/config.yml
-# Origin port must match PORT in backend .env (default 3004)
+# Origin ports: backend 3004, notification-ws 3001, MinIO 9000
+# Path rules must be evaluated top-to-bottom (notif before catch-all api).
 
 ingress:
+  - hostname: api.kimbap.io.vn
+    path: ^/notifications
+    service: http://localhost:3001
+  - hostname: api.kimbap.io.vn
+    path: ^/socket.io
+    service: http://localhost:3001
+  - hostname: api.kimbap.io.vn
+    path: ^/api/v1/notifications
+    service: http://localhost:3001
   - hostname: api.kimbap.io.vn
     service: http://localhost:3004
   - hostname: webhook.kimbap.io.vn
     service: http://localhost:3004
   - hostname: storage.kimbap.io.vn
     service: http://localhost:9000
-  - service: http://localhost:3004
+  - service: http_status:404

@@ -9,6 +9,7 @@ import { prisma } from "../../infra/prisma";
 import { AppError } from "../../utils/app-error";
 import { generateNextCode } from "../../utils/numbering";
 import { toDecimalString } from "../../utils/decimal";
+import { toVnDate, withVnTimestamps } from "../../utils/vn-time";
 import {
   buildStockReceiptChanges,
   buildStockReceiptDetails,
@@ -34,6 +35,12 @@ import {
 import { documentWorkflowService } from "../document-workflow/document-workflow.service";
 import { getDocumentAdapter } from "../document-workflow/adapters/stock-document-adapter";
 import { enqueueStockMutationCompletion } from "../../infra/stock-mutation-queue";
+import {
+  buildStockDocumentVisibilityWhere,
+  resolveStockDocVisibilityScope,
+  stockDocListCacheVisibilityKey,
+  type StockDocVisibilityActor,
+} from "../stock-balance/stock-doc-visibility";
 
 const CACHE_PREFIX = "list:stock-receipts";
 
@@ -44,23 +51,31 @@ export class StockReceiptService {
     private readonly cache: ListCache = listCache,
   ) {}
 
-  /** Danh sách phiếu nhập — cache Redis, hỗ trợ phân trang */
-  async list(tenantId: string, query?: unknown) {
+  /** Danh sách phiếu nhập — cache Redis, lọc theo role/user */
+  async list(tenantId: string, actor: StockDocVisibilityActor, query?: unknown) {
+    const scope = resolveStockDocVisibilityScope(actor.role);
+    const visibilityKey = stockDocListCacheVisibilityKey(scope, actor.userId);
     const cacheSuffix =
       !query || Object.keys(query as object).length === 0
         ? "all"
         : JSON.stringify(paginationSchema.parse(query));
-    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${cacheSuffix}`;
-    return this.cache.getOrSet(cacheKey, async () => {
+    const cacheKey = `${CACHE_PREFIX}:${tenantId}:${visibilityKey}:${cacheSuffix}`;
+    const result = await this.cache.getOrSet(cacheKey, async () => {
+      const visibility = await buildStockDocumentVisibilityWhere(
+        this.db,
+        tenantId,
+        "stock_receipt",
+        actor,
+      );
+      const where = { tenantId, ...visibility };
       if (!query || Object.keys(query as object).length === 0) {
         return this.db.stockReceipt.findMany({
-          where: { tenantId },
+          where,
           include: { details: true },
           orderBy: { createdAt: "desc" },
         });
       }
       const { page, limit } = paginationSchema.parse(query);
-      const where = { tenantId };
       const [data, total] = await Promise.all([
         this.db.stockReceipt.findMany({
           where,
@@ -73,10 +88,27 @@ export class StockReceiptService {
       ]);
       return paginate(data, page, limit, total);
     });
+    return withVnTimestamps(result);
   }
 
   /** Chi tiết 1 phiếu nhập kèm dòng hàng */
-  async get(tenantId: string, id: string) {
+  async get(tenantId: string, id: string, actor: StockDocVisibilityActor) {
+    const visibility = await buildStockDocumentVisibilityWhere(
+      this.db,
+      tenantId,
+      "stock_receipt",
+      actor,
+    );
+    const doc = await this.db.stockReceipt.findFirst({
+      where: { id, tenantId, ...visibility },
+      include: { details: true, supplier: true, warehouse: true },
+    });
+    if (!doc) throw new AppError("NOT_FOUND", 404, "Receipt not found");
+    return withVnTimestamps(doc);
+  }
+
+  /** Load phiếu theo id trong tenant — dùng nội bộ cho mutation (đã có role guard) */
+  private async requireById(tenantId: string, id: string) {
     const doc = await this.db.stockReceipt.findFirst({
       where: { id, tenantId },
       include: { details: true, supplier: true, warehouse: true },
@@ -103,7 +135,7 @@ export class StockReceiptService {
         warehouseId: data.warehouseId,
         supplierId: data.supplierId,
         receiptType: data.receiptType,
-        receiptDate: new Date(data.receiptDate),
+        receiptDate: toVnDate(data.receiptDate),
         deliveredByName: data.deliveredByName,
         note: data.note,
         createdById: userId,
@@ -124,12 +156,12 @@ export class StockReceiptService {
     );
 
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Cập nhật phiếu draft — không cho sửa khi đã submit/duyệt */
   async update(tenantId: string, id: string, input: unknown) {
-    const doc = await this.get(tenantId, id);
+    const doc = await this.requireById(tenantId, id);
     if (doc.status !== "draft") {
       throw new AppError(
         "INVALID_STATUS_TRANSITION",
@@ -153,7 +185,7 @@ export class StockReceiptService {
           warehouseId: data.warehouseId,
           supplierId: data.supplierId,
           receiptType: data.receiptType,
-          receiptDate: new Date(data.receiptDate),
+          receiptDate: toVnDate(data.receiptDate),
           deliveredByName: data.deliveredByName,
           note: data.note,
           totalAmount: toDecimalString(total, 2),
@@ -164,7 +196,7 @@ export class StockReceiptService {
       });
     });
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return result;
+    return withVnTimestamps(result);
   }
 
   private async transition(
@@ -174,7 +206,7 @@ export class StockReceiptService {
     to: string,
     extra: object = {},
   ) {
-    const doc = await this.get(tenantId, id);
+    const doc = await this.requireById(tenantId, id);
     if (!from.includes(doc.status)) {
       throw new AppError(
         "INVALID_STATUS_TRANSITION",
@@ -200,7 +232,7 @@ export class StockReceiptService {
       "pending_approval",
     );
     await notifyReceiptSubmitted(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Duyệt phiếu qua workflow engine */
@@ -216,7 +248,7 @@ export class StockReceiptService {
       },
     );
     await notifyReceiptApproved(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Từ chối phiếu — workflow reject, trả về trạng thái rejected */
@@ -236,7 +268,7 @@ export class StockReceiptService {
       },
     );
     await notifyReceiptRejected(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Hủy phiếu (draft hoặc pending) — không ảnh hưởng tồn kho */
@@ -248,12 +280,12 @@ export class StockReceiptService {
       "cancelled",
     );
     await notifyReceiptCancelled(tenantId, result, actor);
-    return result;
+    return withVnTimestamps(result);
   }
 
   /** Hoàn thành phiếu — đưa vào hàng đợi posting tồn kho bất đồng bộ */
   async complete(tenantId: string, id: string, actor: StockDocActor) {
-    const receipt = await this.get(tenantId, id);
+    const receipt = await this.requireById(tenantId, id);
     if (receipt.status === "completed") {
       return { queued: false, jobId: null, status: "completed" };
     }
@@ -344,10 +376,10 @@ export class StockReceiptService {
         return updated;
       });
       await notifyReceiptCompleted(tenantId, result, actor);
-      return result;
+      return withVnTimestamps(result);
     } catch (err) {
       if (err instanceof AppError && err.code === "IDEMPOTENT_SKIP") {
-        return this.get(tenantId, id);
+        return withVnTimestamps(await this.requireById(tenantId, id));
       }
       throw err;
     }
@@ -355,7 +387,7 @@ export class StockReceiptService {
 
   /** Sao chép phiếu bị reject thành phiếu draft mới để chỉnh sửa lại */
   async cloneFromRejected(tenantId: string, id: string, userId: string) {
-    const src = await this.get(tenantId, id);
+    const src = await this.requireById(tenantId, id);
     if (src.status !== "rejected") {
       throw new AppError(
         "INVALID_STATUS_TRANSITION",

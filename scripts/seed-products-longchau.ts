@@ -1,11 +1,14 @@
 /**
- * Tạo 10 sản phẩm đầy đủ thông tin cho tenant ANC (kho long châu - mã kho 124).
+ * Tạo 10 sản phẩm đầy đủ thông tin cho một tenant + kho.
  *
  * Usage:
- *   bun run db:seed:longchau          (hoặc npx tsx scripts/seed-products-longchau.ts)
+ *   npx tsx scripts/seed-products-longchau.ts
+ *   npx tsx scripts/seed-products-longchau.ts --tenant XLY-1234 --warehouse WH-01
+ *   TENANT_CODE=XLY-1234 WAREHOUSE_CODE=WH-01 npx tsx scripts/seed-products-longchau.ts
  *
  * Sản phẩm thuộc tenant (không gắn trực tiếp vào kho theo schema Product).
- * Script cũng tạo stock_balances cho kho long châu để sản phẩm có tồn đầu.
+ * Script cũng tạo stock_balances cho kho để sản phẩm có tồn đầu.
+ * Nếu kho chưa có sẽ tự tạo (code/name từ --warehouse).
  *
  * Env: DATABASE_URL (từ .env)
  */
@@ -14,8 +17,16 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, TenantStatus } from '../src/generated/prisma';
 import { Pool } from 'pg';
 
-const TENANT_CODE = 'ANC';
-const WAREHOUSE_CODE = 'kho 124';
+function argValue(flag: string): string | undefined {
+  const idx = process.argv.indexOf(flag);
+  if (idx >= 0 && process.argv[idx + 1]) return process.argv[idx + 1];
+  return undefined;
+}
+
+const TENANT_CODE = argValue('--tenant') ?? process.env.TENANT_CODE ?? 'ANC';
+const WAREHOUSE_CODE = argValue('--warehouse') ?? process.env.WAREHOUSE_CODE ?? 'kho 124';
+const WAREHOUSE_NAME =
+  argValue('--warehouse-name') ?? process.env.WAREHOUSE_NAME ?? WAREHOUSE_CODE;
 
 interface ProductSeed {
   sku: string;
@@ -209,12 +220,20 @@ async function main(): Promise<void> {
       throw new Error(`Không tìm thấy tenant có code "${TENANT_CODE}"`);
     }
 
-    const warehouse = await prisma.warehouse.findFirst({
+    let warehouse = await prisma.warehouse.findFirst({
       where: { tenantId: tenant.id, code: WAREHOUSE_CODE },
     });
     if (!warehouse) {
-      throw new Error(
-        `Không tìm thấy kho "${WAREHOUSE_CODE}" của tenant "${TENANT_CODE}". Kho hiện có: kho 124 (kho long châu)`,
+      warehouse = await prisma.warehouse.create({
+        data: {
+          tenantId: tenant.id,
+          code: WAREHOUSE_CODE,
+          name: WAREHOUSE_NAME,
+          isActive: true,
+        },
+      });
+      console.log(
+        `  + Đã tạo kho: ${warehouse.code} - ${warehouse.name} (${warehouse.id})`,
       );
     }
 

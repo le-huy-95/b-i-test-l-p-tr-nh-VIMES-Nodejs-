@@ -8,6 +8,8 @@ TOKEN_FILE="${CONFIG_DIR}/tunnel-token"
 PLIST="${HOME}/Library/LaunchAgents/com.cloudflare.cloudflared.kimbap.plist"
 LABEL="com.cloudflare.cloudflared.kimbap"
 BACKEND_PORT="${BACKEND_PORT:-3004}"
+NOTIF_PORT="${NOTIF_PORT:-3001}"
+MINIO_PORT="${MINIO_PORT:-9000}"
 
 if ! command -v "${CLOUDFLARED}" >/dev/null 2>&1; then
   echo "cloudflared not found. Install with: brew install cloudflared" >&2
@@ -23,14 +25,24 @@ fi
 mkdir -p "${CONFIG_DIR}" "${HOME}/Library/LaunchAgents"
 
 cat > "${CONFIG_FILE}" <<EOF
+# Origin ports: backend ${BACKEND_PORT}, notification-ws ${NOTIF_PORT}, MinIO ${MINIO_PORT}
 ingress:
+  - hostname: api.kimbap.io.vn
+    path: ^/notifications
+    service: http://localhost:${NOTIF_PORT}
+  - hostname: api.kimbap.io.vn
+    path: ^/socket.io
+    service: http://localhost:${NOTIF_PORT}
+  - hostname: api.kimbap.io.vn
+    path: ^/api/v1/notifications
+    service: http://localhost:${NOTIF_PORT}
   - hostname: api.kimbap.io.vn
     service: http://localhost:${BACKEND_PORT}
   - hostname: webhook.kimbap.io.vn
     service: http://localhost:${BACKEND_PORT}
   - hostname: storage.kimbap.io.vn
-    service: http://localhost:9000
-  - service: http://localhost:${BACKEND_PORT}
+    service: http://localhost:${MINIO_PORT}
+  - service: http_status:404
 EOF
 
 cat > "${PLIST}" <<EOF
@@ -69,3 +81,4 @@ launchctl bootstrap "gui/$(id -u)" "${PLIST}"
 echo "Cloudflare tunnel service installed."
 echo "Logs: ${HOME}/Library/Logs/cloudflared-kimbap.log"
 echo "Test: curl https://api.kimbap.io.vn/api/v1/health"
+echo "Notif WS: wss://api.kimbap.io.vn/notifications?token=<JWT>"

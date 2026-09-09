@@ -59,8 +59,13 @@
 ### 2.1 Base URL
 
 ```
-REST:  http://<host>:3000/api/v1/notifications
-WS:    ws://<host>:3001/notifications?token=<JWT_ACCESS_TOKEN>
+# Qua Cloudflare Tunnel (Flutter / mobile)
+REST:  https://api.kimbap.io.vn/api/v1/notifications
+WS:    wss://api.kimbap.io.vn/notifications?token=<JWT_ACCESS_TOKEN>
+
+# Local (không qua tunnel)
+REST:  http://localhost:3001/api/v1/notifications
+WS:    ws://localhost:3001/notifications?token=<JWT_ACCESS_TOKEN>
 ```
 
 ### 2.2 Headers (REST)
