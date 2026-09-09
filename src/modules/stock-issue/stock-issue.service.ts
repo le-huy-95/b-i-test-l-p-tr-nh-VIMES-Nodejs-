@@ -259,101 +259,118 @@ export class StockIssueService {
   async markPendingApproval(
     tenantId: string,
     id: string,
-    _actor: StockDocActor,
+    actor: StockDocActor,
+    externalTrx?: Prisma.TransactionClient,
   ) {
     const existing = await this.requireById(tenantId, id);
     if (existing.status === "pending_approval") {
       return withVnTimestamps(existing);
     }
+    if (existing.status === "out_of_stock") {
+      return withVnTimestamps(existing);
+    }
 
-    const result = await this.db.$transaction(
-      async (trx: Prisma.TransactionClient) => {
-        const rows = await trx.$queryRaw<
-          Array<{
-            id: string;
-            status: string;
-            warehouseId?: string;
-            warehouse_id?: string;
-          }>
-        >`
+    const run = async (trx: Prisma.TransactionClient) => {
+      const rows = await trx.$queryRaw<
+        Array<{
+          id: string;
+          status: string;
+          warehouseId?: string;
+          warehouse_id?: string;
+        }>
+      >`
         SELECT id, status, warehouse_id AS "warehouseId" FROM stock_issues
         WHERE id = ${id} AND tenant_id = ${tenantId}
         FOR UPDATE
       `;
-        const locked = rows[0];
-        if (!locked) throw new AppError("NOT_FOUND", 404, "Issue not found");
-        if (locked.status === "pending_approval") {
-          const issue = await trx.stockIssue.findFirst({
-            where: { id, tenantId },
-            include: { details: true },
-          });
-          if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
-          return issue;
-        }
-        if (locked.status !== "draft") {
-          throw new AppError(
-            "INVALID_STATUS_TRANSITION",
-            409,
-            "Only draft can enter pending_approval",
-          );
-        }
-        const warehouseId = locked.warehouseId ?? locked.warehouse_id;
-        if (!warehouseId)
-          throw new AppError("NOT_FOUND", 404, "Issue not found");
-
+      const locked = rows[0];
+      if (!locked) throw new AppError("NOT_FOUND", 404, "Issue not found");
+      if (locked.status === "pending_approval" || locked.status === "out_of_stock") {
         const issue = await trx.stockIssue.findFirst({
           where: { id, tenantId },
           include: { details: true },
         });
         if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
+        return issue;
+      }
+      if (locked.status !== "draft") {
+        throw new AppError(
+          "INVALID_STATUS_TRANSITION",
+          409,
+          "Only draft can enter pending_approval",
+        );
+      }
+      const warehouseId = locked.warehouseId ?? locked.warehouse_id;
+      if (!warehouseId) throw new AppError("NOT_FOUND", 404, "Issue not found");
 
-        let allocations;
-        try {
-          allocations = await allocateIssueLines(
-            trx,
-            tenantId,
-            warehouseId,
-            issue.details,
-            {
-              excludeRef: { docType: "stock_issue", docId: id },
-            },
-          );
-        } catch (err) {
-          if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
-            return trx.stockIssue.update({
-              where: { id },
-              data: {
-                status: "out_of_stock",
-                statusBeforeOutOfStock: "pending_approval",
-                outOfStockAt: new Date(),
-                outOfStockReason: formatOutOfStockReason(err),
-              },
-              include: { details: true },
-            });
-          }
-          throw err;
-        }
+      const issue = await trx.stockIssue.findFirst({
+        where: { id, tenantId },
+        include: { details: true },
+      });
+      if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
 
-        const expiresAt = new Date(Date.now() + 24 * 3600_000);
-        const reservations = mergeReservations(
+      let allocations;
+      try {
+        allocations = await allocateIssueLines(
+          trx,
           tenantId,
           warehouseId,
-          id,
-          expiresAt,
-          allocations,
+          issue.details,
+          {
+            excludeRef: { docType: "stock_issue", docId: id },
+          },
         );
-        await trx.stockReservation.createMany({ data: reservations });
+      } catch (err) {
+        if (isStockInsufficientError(err)) {
+          return trx.stockIssue.update({
+            where: { id },
+            data: {
+              status: "out_of_stock",
+              statusBeforeOutOfStock: "pending_approval",
+              outOfStockAt: new Date(),
+              outOfStockReason: formatOutOfStockReason(err),
+            },
+            include: { details: true },
+          });
+        }
+        throw err;
+      }
 
-        return trx.stockIssue.update({
-          where: { id },
-          data: { status: "pending_approval" },
-          include: { details: true },
-        });
-      },
-    );
-    await cacheInvalidationService.invalidateStockDocuments(tenantId);
+      const expiresAt = new Date(Date.now() + 24 * 3600_000);
+      const reservations = mergeReservations(
+        tenantId,
+        warehouseId,
+        id,
+        expiresAt,
+        allocations,
+      );
+      await trx.stockReservation.createMany({ data: reservations });
+
+      return trx.stockIssue.update({
+        where: { id },
+        data: { status: "pending_approval" },
+        include: { details: true },
+      });
+    };
+
+    const result = externalTrx
+      ? await run(externalTrx)
+      : await this.db.$transaction(run);
+
+    if (!externalTrx) {
+      await cacheInvalidationService.invalidateStockDocuments(tenantId);
+    }
     if (result.status === "out_of_stock") {
-      await notifyIssueOutOfStock(tenantId, result, _actor, result.outOfStockReason);
+      try {
+        await notifyIssueOutOfStock(
+          tenantId,
+          result,
+          actor,
+          result.outOfStockReason,
+        );
+      } catch (err) {
+        console.error("notifyIssueOutOfStock failed", err);
+      }
     }
     return withVnTimestamps(result);
   }
@@ -361,6 +378,11 @@ export class StockIssueService {
   /** Duyệt phiếu xuất qua workflow */
   async approve(tenantId: string, id: string, actor: StockDocActor) {
     const issue = await this.requireById(tenantId, id);
+    // Soft-fail reserve có thể đã set out_of_stock trước khi workflow chuyển approved.
+    // Không overwrite — giữ hết hàng để chờ nhập kho.
+    if (issue.status === "out_of_stock") {
+      return withVnTimestamps(issue);
+    }
     if (issue.status !== "pending_approval") {
       throw new AppError("INVALID_STATUS_TRANSITION", 409, "Invalid status");
     }
@@ -540,7 +562,7 @@ export class StockIssueService {
               { excludeRef: { docType: "stock_issue", docId: id } },
             );
           } catch (err) {
-            if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
+            if (isStockInsufficientError(err)) {
               return trx.stockIssue.update({
                 where: { id },
                 data: {
@@ -571,18 +593,34 @@ export class StockIssueService {
             ),
           );
 
-          await this.posting.apply(
-            {
-              direction: "out",
-              changes: merged,
-              ledger: {
-                refDocType: "stock_issue",
-                refDocId: id,
-                createdById: actor.userId,
+          try {
+            await this.posting.apply(
+              {
+                direction: "out",
+                changes: merged,
+                ledger: {
+                  refDocType: "stock_issue",
+                  refDocId: id,
+                  createdById: actor.userId,
+                },
               },
-            },
-            trx,
-          );
+              trx,
+            );
+          } catch (err) {
+            if (isStockInsufficientError(err)) {
+              return trx.stockIssue.update({
+                where: { id },
+                data: {
+                  status: "out_of_stock",
+                  statusBeforeOutOfStock: "approved",
+                  outOfStockAt: new Date(),
+                  outOfStockReason: formatOutOfStockReason(err),
+                },
+                include: { details: true },
+              });
+            }
+            throw err;
+          }
 
           await trx.stockReservation.updateMany({
             where: {
@@ -602,12 +640,16 @@ export class StockIssueService {
       );
       await cacheInvalidationService.invalidateStockMutations(tenantId);
       if (result.status === "out_of_stock") {
-        await notifyIssueOutOfStock(
-          tenantId,
-          result,
-          actor,
-          result.outOfStockReason,
-        );
+        try {
+          await notifyIssueOutOfStock(
+            tenantId,
+            result,
+            actor,
+            result.outOfStockReason,
+          );
+        } catch (err) {
+          console.error("notifyIssueOutOfStock failed", err);
+        }
         return withVnTimestamps(result);
       }
       await notifyIssueCompleted(tenantId, result, actor);
@@ -704,7 +746,7 @@ export class StockIssueService {
         await notifyIssueStockAvailable(tenantId, updated, actor);
         resolved.push({ id: updated.id, status: updated.status });
       } catch (err) {
-        if (err instanceof AppError && err.code === "STOCK_INSUFFICIENT") {
+        if (isStockInsufficientError(err)) {
           continue;
         }
         throw err;
@@ -718,11 +760,30 @@ export class StockIssueService {
   }
 }
 
-function formatOutOfStockReason(err: AppError): string {
+function isStockInsufficientError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code: unknown }).code === "STOCK_INSUFFICIENT"
+  );
+}
+
+function formatOutOfStockReason(err: unknown): string {
+  const details =
+    typeof err === "object" && err !== null && "details" in err
+      ? (err as { details?: unknown }).details
+      : undefined;
+  const message =
+    err instanceof Error
+      ? err.message
+      : typeof err === "object" && err !== null && "message" in err
+        ? String((err as { message: unknown }).message)
+        : "STOCK_INSUFFICIENT";
   try {
-    return JSON.stringify(err.details ?? err.message);
+    return JSON.stringify(details ?? message);
   } catch {
-    return err.message;
+    return message;
   }
 }
 

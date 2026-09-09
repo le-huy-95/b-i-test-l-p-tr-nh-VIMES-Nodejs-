@@ -73,7 +73,13 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
     const stockActor = toStockDocActor(actor);
     switch (newStatus) {
       case "in_review":
-        await stockIssueService.submit(tenantId, documentId, stockActor);
+        // Legacy workflow submit: đưa phiếu sang pending_approval (+ reserve).
+        await stockIssueService.markPendingApproval(
+          tenantId,
+          documentId,
+          stockActor,
+          _trx,
+        );
         break;
       case "rejected":
         await stockIssueService.reject(
@@ -87,11 +93,26 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
         await stockIssueService.cancel(tenantId, documentId, stockActor);
         break;
       case "approved":
+        // Nếu reserve soft-fail → out_of_stock, approve() giữ nguyên (không overwrite).
         await stockIssueService.approve(tenantId, documentId, stockActor);
         break;
       default:
         break;
     }
+  }
+
+  async onEnteredPendingApproval(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+    trx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await stockIssueService.markPendingApproval(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
+      trx,
+    );
   }
 
   async onComplete(
@@ -153,7 +174,11 @@ export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
     const stockActor = toStockDocActor(actor);
     switch (newStatus) {
       case "in_review":
-        await stockReceiptService.submit(tenantId, documentId, stockActor);
+        await stockReceiptService.markPendingApproval(
+          tenantId,
+          documentId,
+          stockActor,
+        );
         break;
       case "rejected":
         await stockReceiptService.reject(
@@ -172,6 +197,19 @@ export class StockReceiptDocumentAdapter implements DocumentAdapterPort {
       default:
         break;
     }
+  }
+
+  async onEnteredPendingApproval(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+    _trx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await stockReceiptService.markPendingApproval(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
+    );
   }
 
   async onComplete(
@@ -223,13 +261,34 @@ export class StockOpeningDocumentAdapter implements DocumentAdapterPort {
   }
 
   async onStatusChanged(
-    _tenantId: string,
-    _documentId: string,
+    tenantId: string,
+    documentId: string,
     _oldStatus: WorkflowDocumentStatus,
-    _newStatus: WorkflowDocumentStatus,
-    _actor: WorkflowActor,
+    newStatus: WorkflowDocumentStatus,
+    actor: WorkflowActor,
     _trx: Prisma.TransactionClient,
-  ): Promise<void> {}
+  ): Promise<void> {
+    if (newStatus === "in_review") {
+      await stockOpeningService.markPendingApproval(
+        tenantId,
+        documentId,
+        toStockDocActor(actor),
+      );
+    }
+  }
+
+  async onEnteredPendingApproval(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+    _trx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await stockOpeningService.markPendingApproval(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
+    );
+  }
 
   async onComplete(
     tenantId: string,

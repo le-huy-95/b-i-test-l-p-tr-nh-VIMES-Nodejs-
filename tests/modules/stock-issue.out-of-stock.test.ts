@@ -65,6 +65,201 @@ describe('stock issue out_of_stock', () => {
     mockPrisma.stockIssue.update.mockReset();
   });
 
+  it('markPendingApproval soft-fails to out_of_stock when specific batch lot is empty', async () => {
+    mockPrisma.stockIssue.findFirst.mockResolvedValue({
+      id: 'issue-1',
+      tenantId: 'tenant-1',
+      status: 'draft',
+      warehouseId: 'warehouse-1',
+      code: 'ISSUE-001',
+      createdById: 'creator-1',
+      details: [],
+    });
+
+    const outOfStockIssue = {
+      id: 'issue-1',
+      status: 'out_of_stock',
+      statusBeforeOutOfStock: 'pending_approval',
+      code: 'ISSUE-001',
+      createdById: 'creator-1',
+      details: [],
+    };
+
+    const trx = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'issue-1', status: 'draft', warehouseId: 'warehouse-1' },
+      ]),
+      stockIssue: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'issue-1',
+          tenantId: 'tenant-1',
+          status: 'draft',
+          warehouseId: 'warehouse-1',
+          details: [
+            {
+              id: 'line-1',
+              productId: 'product-1',
+              qtyBaseUnit: '5.0000',
+              batchId: 'empty-lot',
+            },
+          ],
+        }),
+        update: vi.fn().mockResolvedValue(outOfStockIssue),
+      },
+      stockIssueDetail: { update: vi.fn() },
+      product: { findMany: vi.fn().mockResolvedValue([]) },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            productId: 'product-1',
+            batchId: 'empty-lot',
+            onhandQty: '0',
+            updatedAt: new Date('2026-01-01'),
+          },
+          {
+            productId: 'product-1',
+            batchId: 'other-lot',
+            onhandQty: '100',
+            updatedAt: new Date('2026-01-02'),
+          },
+        ]),
+      },
+      batch: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'empty-lot',
+            expiryDate: new Date('2027-01-01'),
+            createdAt: new Date('2026-01-01'),
+            unitCost: '5.0000',
+          },
+          {
+            id: 'other-lot',
+            expiryDate: new Date('2027-06-01'),
+            createdAt: new Date('2026-01-02'),
+            unitCost: '6.0000',
+          },
+        ]),
+      },
+      stockReservation: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        createMany: vi.fn(),
+      },
+    };
+
+    mockTransaction.mockImplementation(async (cb: (t: typeof trx) => Promise<unknown>) =>
+      cb(trx),
+    );
+
+    const { stockIssueService } = await import(
+      '../../src/modules/stock-issue/stock-issue.service'
+    );
+    const result = await stockIssueService.markPendingApproval(
+      'tenant-1',
+      'issue-1',
+      actor,
+    );
+
+    expect(trx.stockReservation.createMany).not.toHaveBeenCalled();
+    expect(trx.stockIssue.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'out_of_stock',
+          statusBeforeOutOfStock: 'pending_approval',
+        }),
+      }),
+    );
+    expect(result).toMatchObject({ status: 'out_of_stock' });
+    expect(notifyIssueOutOfStock).toHaveBeenCalled();
+  });
+
+  it('markPendingApproval soft-fails when requested batchId has no balance row', async () => {
+    mockPrisma.stockIssue.findFirst.mockResolvedValue({
+      id: 'issue-1',
+      tenantId: 'tenant-1',
+      status: 'draft',
+      warehouseId: 'warehouse-1',
+      code: 'ISSUE-001',
+      createdById: 'creator-1',
+      details: [],
+    });
+
+    const outOfStockIssue = {
+      id: 'issue-1',
+      status: 'out_of_stock',
+      statusBeforeOutOfStock: 'pending_approval',
+      code: 'ISSUE-001',
+      createdById: 'creator-1',
+      details: [],
+    };
+
+    const trx = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        { id: 'issue-1', status: 'draft', warehouseId: 'warehouse-1' },
+      ]),
+      stockIssue: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'issue-1',
+          tenantId: 'tenant-1',
+          status: 'draft',
+          warehouseId: 'warehouse-1',
+          details: [
+            {
+              id: 'line-1',
+              productId: 'product-1',
+              qtyBaseUnit: '2.0000',
+              batchId: 'missing-lot',
+            },
+          ],
+        }),
+        update: vi.fn().mockResolvedValue(outOfStockIssue),
+      },
+      stockIssueDetail: { update: vi.fn() },
+      product: { findMany: vi.fn().mockResolvedValue([]) },
+      stockBalance: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            productId: 'product-1',
+            batchId: 'other-lot',
+            onhandQty: '50',
+            updatedAt: new Date('2026-01-01'),
+          },
+        ]),
+      },
+      batch: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'other-lot',
+            expiryDate: new Date('2027-01-01'),
+            createdAt: new Date('2026-01-01'),
+            unitCost: '5.0000',
+          },
+        ]),
+      },
+      stockReservation: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        findMany: vi.fn().mockResolvedValue([]),
+        createMany: vi.fn(),
+      },
+    };
+
+    mockTransaction.mockImplementation(async (cb: (t: typeof trx) => Promise<unknown>) =>
+      cb(trx),
+    );
+
+    const { stockIssueService } = await import(
+      '../../src/modules/stock-issue/stock-issue.service'
+    );
+    const result = await stockIssueService.markPendingApproval(
+      'tenant-1',
+      'issue-1',
+      actor,
+    );
+
+    expect(result).toMatchObject({ status: 'out_of_stock' });
+    expect(notifyIssueOutOfStock).toHaveBeenCalled();
+  });
+
   it('markPendingApproval soft-fails to out_of_stock when stock insufficient', async () => {
     mockPrisma.stockIssue.findFirst.mockResolvedValue({
       id: 'issue-1',
@@ -234,10 +429,13 @@ describe('stock issue out_of_stock', () => {
     });
   });
 
-  it('rejects approve when out_of_stock', async () => {
+  it('approve is no-op when already out_of_stock so workflow final step cannot overwrite', async () => {
     mockPrisma.stockIssue.findFirst.mockResolvedValue({
       id: 'issue-1',
       status: 'out_of_stock',
+      statusBeforeOutOfStock: 'pending_approval',
+      code: 'ISSUE-001',
+      createdById: 'creator-1',
       details: [],
     });
 
@@ -245,13 +443,12 @@ describe('stock issue out_of_stock', () => {
       '../../src/modules/stock-issue/stock-issue.service'
     );
 
-    await expect(
-      stockIssueService.approve('tenant-1', 'issue-1', actor),
-    ).rejects.toMatchObject({
-      code: 'INVALID_STATUS_TRANSITION',
-      statusCode: 409,
-    });
+    const result = await stockIssueService.approve('tenant-1', 'issue-1', actor);
+
+    expect(mockPrisma.stockIssue.update).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: 'out_of_stock' });
   });
+
 
   it('cancels from out_of_stock and clears out-of-stock fields', async () => {
     const trx = {
