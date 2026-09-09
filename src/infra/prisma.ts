@@ -15,7 +15,7 @@ import { env } from "../config/env";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 // Connection pool PostgreSQL — dùng chung cho Prisma adapter
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: env.DATABASE_URL,
 });
 

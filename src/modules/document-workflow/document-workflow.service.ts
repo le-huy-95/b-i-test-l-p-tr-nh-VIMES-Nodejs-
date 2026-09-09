@@ -157,10 +157,130 @@ export class DocumentWorkflowService {
       null,
       "draft",
       actor,
-      "Workflow initialized",
+      "Tạo Phiếu",
     );
 
     return this.buildResult(workflow);
+  }
+
+  /**
+   * Sau create: duyệt bước creator + workflow → in_review.
+   * Không gọi adapter.onStatusChanged(in_review) — phiếu giữ draft.
+   */
+  async startReviewOnCreate(
+    tenantId: string,
+    documentType: DocumentType,
+    documentId: string,
+    actor: WorkflowActor,
+    _adapter: DocumentAdapterPort,
+  ): Promise<WorkflowDocumentResult> {
+    return this.db.$transaction(async (trx) => {
+      const rows = await trx.$queryRaw<
+        Array<{ id: string; status: string; version: number }>
+      >`
+        SELECT id, status, version FROM document_workflows
+        WHERE id = (
+          SELECT id FROM document_workflows
+          WHERE tenant_id = ${tenantId}
+            AND document_type = ${documentType}::"DocumentType"
+            AND document_id = ${documentId}
+          LIMIT 1
+        )
+        FOR UPDATE
+      `;
+      const locked = rows[0];
+      if (!locked) {
+        throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
+      }
+
+      const workflow = await trx.documentWorkflow.findFirst({
+        where: { id: locked.id, tenantId },
+        include: { steps: { orderBy: { sequence: "asc" } } },
+      });
+      if (!workflow) {
+        throw new AppError("WORKFLOW_NOT_FOUND", 404, "Workflow not found");
+      }
+      if (workflow.status !== "draft") {
+        throw new AppError(
+          "INVALID_ACTION",
+          409,
+          `Cannot start review from status ${workflow.status}`,
+        );
+      }
+
+      const creatorStep = workflow.steps.find((s) => s.stepCode === "creator");
+      if (!creatorStep) {
+        throw new AppError("STEP_NOT_FOUND", 404, "Creator step not found");
+      }
+      if (creatorStep.status !== "pending") {
+        throw new AppError(
+          "STEP_NOT_PENDING",
+          409,
+          "Creator step is not pending",
+        );
+      }
+
+      const now = new Date();
+      await trx.documentWorkflowStep.update({
+        where: { id: creatorStep.id },
+        data: {
+          status: "approved",
+          actualSignerId: actor.userId,
+          note: "Auto-approved on create",
+          actionAt: now,
+          version: { increment: 1 },
+        },
+      });
+
+      const allSteps = await trx.documentWorkflowStep.findMany({
+        where: { workflowId: workflow.id },
+        orderBy: { sequence: "asc" },
+      });
+      const nextPending = allSteps.find((s) => s.status === "pending");
+
+      const updated = await trx.documentWorkflow.update({
+        where: { id: workflow.id },
+        data: {
+          status: "in_review",
+          currentStepCode: nextPending?.stepCode ?? null,
+          currentStepStatus: nextPending ? "pending" : null,
+          currentStepUpdatedAt: now,
+          lastActionById: actor.userId,
+          lastActionAt: now,
+          version: { increment: 1 },
+        },
+        include: { steps: { orderBy: { sequence: "asc" } } },
+      });
+
+      await this.appendHistory(
+        trx,
+        tenantId,
+        workflow.id,
+        documentType,
+        documentId,
+        creatorStep.id,
+        "pending",
+        "approved",
+        actor,
+        "Auto-approved on create",
+      );
+      await this.appendHistory(
+        trx,
+        tenantId,
+        workflow.id,
+        documentType,
+        documentId,
+        null,
+        "draft",
+        "in_review",
+        actor,
+        "Started review on create",
+      );
+
+      return this.mapWorkflowToResult(
+        updated as typeof updated & { steps: Array<any> },
+      );
+    });
   }
 
   /** Lấy chi tiết workflow của 1 chứng từ (các bước + trạng thái) */
@@ -194,6 +314,8 @@ export class DocumentWorkflowService {
       documentType?: DocumentType;
       status?: WorkflowDocumentStatus;
       assignedApproverId?: string;
+      warehouseId?: string;
+      search?: string;
       page?: number;
       limit?: number;
     },
@@ -208,6 +330,8 @@ export class DocumentWorkflowService {
   }> {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
+    const warehouseId = query.warehouseId?.trim() || undefined;
+    const search = query.search?.trim() || undefined;
 
     const where: Record<string, unknown> = { tenantId };
     if (query.documentType) where.documentType = query.documentType;
@@ -219,6 +343,21 @@ export class DocumentWorkflowService {
           status: "pending",
         },
       };
+    }
+
+    if (warehouseId || search) {
+      const matchedIds = await this.resolveDocumentIdsByWarehouseOrSearch(
+        tenantId,
+        query.documentType,
+        { warehouseId, search },
+      );
+      if (matchedIds.length === 0) {
+        return {
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+        };
+      }
+      where.documentId = { in: matchedIds };
     }
 
     const [workflows, total] = await Promise.all([
@@ -243,6 +382,69 @@ export class DocumentWorkflowService {
         totalPages: Math.ceil(total / limit) || 0,
       },
     };
+  }
+
+  /**
+   * Resolve phiếu IDs matching warehouseId / search (code OR warehouse.name).
+   * document_workflows không có code/warehouseId nên phải lookup bảng phiếu.
+   */
+  private async resolveDocumentIdsByWarehouseOrSearch(
+    tenantId: string,
+    documentType: DocumentType | undefined,
+    filters: { warehouseId?: string; search?: string },
+  ): Promise<string[]> {
+    const types: DocumentType[] = documentType
+      ? [documentType]
+      : ["stock_issue", "stock_receipt", "stock_opening"];
+
+    const docWhere: Record<string, unknown> = { tenantId };
+    if (filters.warehouseId) {
+      docWhere.warehouseId = filters.warehouseId;
+    }
+    if (filters.search) {
+      docWhere.OR = [
+        { code: { contains: filters.search, mode: "insensitive" } },
+        {
+          warehouse: {
+            name: { contains: filters.search, mode: "insensitive" },
+          },
+        },
+      ];
+    }
+
+    const idLists = await Promise.all(
+      types.map(async (type) => {
+        const rows = await this.findStockDocIds(type, docWhere);
+        return rows.map((row) => row.id);
+      }),
+    );
+
+    return [...new Set(idLists.flat())];
+  }
+
+  private async findStockDocIds(
+    documentType: DocumentType,
+    where: Record<string, unknown>,
+  ): Promise<Array<{ id: string }>> {
+    switch (documentType) {
+      case "stock_issue":
+        return this.db.stockIssue.findMany({
+          where,
+          select: { id: true },
+        });
+      case "stock_receipt":
+        return this.db.stockReceipt.findMany({
+          where,
+          select: { id: true },
+        });
+      case "stock_opening":
+        return this.db.stockOpeningBalance.findMany({
+          where,
+          select: { id: true },
+        });
+      default:
+        return [];
+    }
   }
 
   /** Thực hiện hành động duyệt: approve / reject / cancel — có optimistic lock version */
@@ -779,6 +981,19 @@ export class DocumentWorkflowService {
       input.note ?? "Step approved",
     );
 
+    await this.maybeEnterPendingApproval(
+      trx,
+      workflow.tenantId,
+      workflow.documentId,
+      step.stepCode,
+      allSteps.map((s) => ({
+        stepCode: s.stepCode,
+        status: s.status as WorkflowStepStatus,
+      })),
+      actor,
+      adapter,
+    );
+
     if (newDocStatus !== oldDocStatus) {
       await this.appendHistory(
         trx,
@@ -1075,6 +1290,19 @@ export class DocumentWorkflowService {
       { proxySignerId: input.proxySignerId, authorizationIds },
     );
 
+    await this.maybeEnterPendingApproval(
+      trx,
+      workflow.tenantId,
+      workflow.documentId,
+      step.stepCode,
+      allSteps.map((s) => ({
+        stepCode: s.stepCode,
+        status: s.status as WorkflowStepStatus,
+      })),
+      actor,
+      adapter,
+    );
+
     if (newDocStatus !== oldDocStatus) {
       await this.appendHistory(
         trx,
@@ -1102,6 +1330,35 @@ export class DocumentWorkflowService {
 
     return this.mapWorkflowToResult(
       updated as typeof updated & { steps: Array<any> },
+    );
+  }
+
+  /** Duyệt bước đầu sau creator → phiếu sang pending_approval (qua adapter) */
+  private async maybeEnterPendingApproval(
+    trx: Prisma.TransactionClient,
+    tenantId: string,
+    documentId: string,
+    approvedStepCode: string,
+    allSteps: Array<{ stepCode: string; status: WorkflowStepStatus }>,
+    actor: WorkflowActor,
+    adapter: DocumentAdapterPort,
+  ): Promise<void> {
+    if (approvedStepCode === "creator") return;
+
+    const approvedPostCreatorCount = allSteps.filter(
+      (s) =>
+        Boolean(s.stepCode) &&
+        s.stepCode !== "creator" &&
+        (s.status === "approved" || s.status === "signed_by_proxy"),
+    ).length;
+
+    if (approvedPostCreatorCount !== 1) return;
+
+    await adapter.onEnteredPendingApproval(
+      tenantId,
+      documentId,
+      actor,
+      trx,
     );
   }
 
@@ -1142,6 +1399,26 @@ export class DocumentWorkflowService {
         break;
       default:
         break;
+    }
+
+    if (documentType === "stock_issue") {
+      const issue = await this.db.stockIssue.findFirst({
+        where: { id: documentId, tenantId },
+        select: { status: true },
+      });
+      if (issue?.status === "out_of_stock") {
+        const allowed = new Set<WorkflowAction>(["cancel", "reject"]);
+        return {
+          documentId,
+          documentType,
+          status: workflow.status as WorkflowDocumentStatus,
+          currentStepId: currentStep?.id ?? null,
+          currentStepCode: currentStep?.stepCode ?? null,
+          currentStepName: currentStep?.stepName ?? null,
+          currentStepAssignedApproverId: currentStep?.assignedApproverId ?? null,
+          actions: actions.filter((a) => allowed.has(a)),
+        };
+      }
     }
 
     return {

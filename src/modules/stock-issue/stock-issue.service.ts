@@ -5,7 +5,7 @@
  * posting giảm tồn khi completed; tích hợp workflow + notify.
  */
 import type { Prisma, PrismaClient } from "../../infra/prisma-types";
-import { prisma } from "../../infra/prisma";
+import { prisma, pool } from "../../infra/prisma";
 import { AppError } from "../../utils/app-error";
 import { generateNextCode } from "../../utils/numbering";
 import { d, toDecimalString } from "../../utils/decimal";
@@ -188,6 +188,8 @@ export class StockIssueService {
       adapter,
     );
 
+    await this.markOutOfStockIfInsufficient(tenantId, result.id, actor);
+
     const created = await this.requireById(tenantId, result.id);
     const workflow = await documentWorkflowService.getWorkflow(
       tenantId,
@@ -267,7 +269,12 @@ export class StockIssueService {
       return withVnTimestamps(existing);
     }
     if (existing.status === "out_of_stock") {
-      return withVnTimestamps(existing);
+      throw new AppError(
+        "STOCK_INSUFFICIENT",
+        409,
+        "Sản phẩm đã hết trong kho",
+        { status: "out_of_stock", issueId: id },
+      );
     }
 
     const run = async (trx: Prisma.TransactionClient) => {
@@ -285,13 +292,21 @@ export class StockIssueService {
       `;
       const locked = rows[0];
       if (!locked) throw new AppError("NOT_FOUND", 404, "Issue not found");
-      if (locked.status === "pending_approval" || locked.status === "out_of_stock") {
+      if (locked.status === "pending_approval") {
         const issue = await trx.stockIssue.findFirst({
           where: { id, tenantId },
           include: { details: true },
         });
         if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
         return issue;
+      }
+      if (locked.status === "out_of_stock") {
+        throw new AppError(
+          "STOCK_INSUFFICIENT",
+          409,
+          "Sản phẩm đã hết trong kho",
+          { status: "out_of_stock", issueId: id },
+        );
       }
       if (locked.status !== "draft") {
         throw new AppError(
@@ -322,16 +337,52 @@ export class StockIssueService {
         );
       } catch (err) {
         if (isStockInsufficientError(err)) {
-          return trx.stockIssue.update({
-            where: { id },
-            data: {
-              status: "out_of_stock",
-              statusBeforeOutOfStock: "pending_approval",
-              outOfStockAt: new Date(),
-              outOfStockReason: formatOutOfStockReason(err),
-            },
-            include: { details: true },
-          });
+          // Commit out_of_stock trên connection riêng khi đang trong workflow txn —
+          // tránh bị rollback cùng bước duyệt (Prisma nested savepoint).
+          const updated = externalTrx
+            ? await commitIssueOutOfStockViaPool({
+                id,
+                tenantId,
+                statusBeforeOutOfStock: "pending_approval",
+                reason: formatOutOfStockReason(err),
+              })
+            : await trx.stockIssue.update({
+                where: { id },
+                data: {
+                  status: "out_of_stock",
+                  statusBeforeOutOfStock: "pending_approval",
+                  outOfStockAt: new Date(),
+                  outOfStockReason: formatOutOfStockReason(err),
+                },
+                include: { details: true },
+              });
+          try {
+            await notifyIssueOutOfStock(
+              tenantId,
+              updated,
+              actor,
+              updated.outOfStockReason,
+            );
+          } catch (notifyErr) {
+            console.error("notifyIssueOutOfStock failed", notifyErr);
+          }
+          await cacheInvalidationService.invalidateStockDocuments(tenantId);
+          if (externalTrx) {
+            throw new AppError(
+              "STOCK_INSUFFICIENT",
+              409,
+              "Sản phẩm đã hết trong kho",
+              {
+                status: "out_of_stock",
+                issueId: id,
+                details:
+                  typeof err === "object" && err !== null && "details" in err
+                    ? (err as { details?: unknown }).details
+                    : undefined,
+              },
+            );
+          }
+          return updated;
         }
         throw err;
       }
@@ -360,28 +411,74 @@ export class StockIssueService {
     if (!externalTrx) {
       await cacheInvalidationService.invalidateStockDocuments(tenantId);
     }
-    if (result.status === "out_of_stock") {
+    return withVnTimestamps(result);
+  }
+
+  /**
+   * Sau create (chưa ai duyệt): nếu không đủ tồn theo dòng/lô → out_of_stock ngay.
+   */
+  async markOutOfStockIfInsufficient(
+    tenantId: string,
+    id: string,
+    actor: StockDocActor,
+  ) {
+    const issue = await this.db.stockIssue.findFirst({
+      where: { id, tenantId },
+      include: { details: true },
+    });
+    if (!issue || issue.status !== "draft") return issue;
+
+    try {
+      await this.db.$transaction(async (trx) => {
+        await allocateIssueLines(
+          trx,
+          tenantId,
+          issue.warehouseId,
+          issue.details,
+          {
+            excludeRef: { docType: "stock_issue", docId: id },
+            dryRun: true,
+          },
+        );
+      });
+      return issue;
+    } catch (err) {
+      if (!isStockInsufficientError(err)) throw err;
+      const updated = await this.db.stockIssue.update({
+        where: { id },
+        data: {
+          status: "out_of_stock",
+          statusBeforeOutOfStock: "pending_approval",
+          outOfStockAt: new Date(),
+          outOfStockReason: formatOutOfStockReason(err),
+        },
+        include: { details: true },
+      });
       try {
         await notifyIssueOutOfStock(
           tenantId,
-          result,
+          updated,
           actor,
-          result.outOfStockReason,
+          updated.outOfStockReason,
         );
-      } catch (err) {
-        console.error("notifyIssueOutOfStock failed", err);
+      } catch (notifyErr) {
+        console.error("notifyIssueOutOfStock failed", notifyErr);
       }
+      await cacheInvalidationService.invalidateStockDocuments(tenantId);
+      return updated;
     }
-    return withVnTimestamps(result);
   }
 
   /** Duyệt phiếu xuất qua workflow */
   async approve(tenantId: string, id: string, actor: StockDocActor) {
     const issue = await this.requireById(tenantId, id);
-    // Soft-fail reserve có thể đã set out_of_stock trước khi workflow chuyển approved.
-    // Không overwrite — giữ hết hàng để chờ nhập kho.
     if (issue.status === "out_of_stock") {
-      return withVnTimestamps(issue);
+      throw new AppError(
+        "STOCK_INSUFFICIENT",
+        409,
+        "Sản phẩm đã hết trong kho — không thể duyệt",
+        { status: "out_of_stock", issueId: id },
+      );
     }
     if (issue.status !== "pending_approval") {
       throw new AppError("INVALID_STATUS_TRANSITION", 409, "Invalid status");
@@ -787,6 +884,60 @@ function formatOutOfStockReason(err: unknown): string {
   }
 }
 
+/** Ghi out_of_stock ngoài workflow transaction (connection pool riêng). */
+async function commitIssueOutOfStockViaPool(input: {
+  id: string;
+  tenantId: string;
+  statusBeforeOutOfStock: "pending_approval" | "approved";
+  reason: string;
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `
+      UPDATE stock_issues
+      SET status = 'out_of_stock',
+          status_before_out_of_stock = $3::"DocStatus",
+          out_of_stock_at = NOW(),
+          out_of_stock_reason = $4,
+          updated_at = NOW()
+      WHERE id = $1 AND tenant_id = $2
+      RETURNING id, code, created_by_id AS "createdById", status,
+                status_before_out_of_stock AS "statusBeforeOutOfStock",
+                out_of_stock_reason AS "outOfStockReason"
+      `,
+      [
+        input.id,
+        input.tenantId,
+        input.statusBeforeOutOfStock,
+        input.reason,
+      ],
+    );
+    if (!result.rows[0]) {
+      throw new AppError("NOT_FOUND", 404, "Issue not found");
+    }
+    await client.query("COMMIT");
+    return result.rows[0] as {
+      id: string;
+      code: string;
+      createdById: string;
+      status: string;
+      statusBeforeOutOfStock: string | null;
+      outOfStockReason: string | null;
+    };
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function allocateIssueLines(
   trx: Prisma.TransactionClient,
   tenantId: string,
@@ -797,7 +948,10 @@ async function allocateIssueLines(
     qtyBaseUnit: { toString(): string };
     batchId?: string | null;
   }>,
-  options: { excludeRef?: { docType: string; docId: string } },
+  options: {
+    excludeRef?: { docType: string; docId: string };
+    dryRun?: boolean;
+  },
 ) {
   const productIds = [...new Set(details.map((line) => line.productId))];
   const lotsByProduct = await loadPickableLots(trx, {
@@ -832,7 +986,7 @@ async function allocateIssueLines(
       allocated = consumeLots(line.qtyBaseUnit.toString(), lots, "none");
     }
 
-    if (allocated.length === 1 && line.id) {
+    if (!options.dryRun && allocated.length === 1 && line.id) {
       await trx.stockIssueDetail.update({
         where: { id: line.id },
         data: { batchId: allocated[0].batchId },

@@ -429,7 +429,7 @@ describe('stock issue out_of_stock', () => {
     });
   });
 
-  it('approve is no-op when already out_of_stock so workflow final step cannot overwrite', async () => {
+  it('approve rejects when already out_of_stock', async () => {
     mockPrisma.stockIssue.findFirst.mockResolvedValue({
       id: 'issue-1',
       status: 'out_of_stock',
@@ -443,10 +443,13 @@ describe('stock issue out_of_stock', () => {
       '../../src/modules/stock-issue/stock-issue.service'
     );
 
-    const result = await stockIssueService.approve('tenant-1', 'issue-1', actor);
-
+    await expect(
+      stockIssueService.approve('tenant-1', 'issue-1', actor),
+    ).rejects.toMatchObject({
+      code: 'STOCK_INSUFFICIENT',
+      statusCode: 409,
+    });
     expect(mockPrisma.stockIssue.update).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ status: 'out_of_stock' });
   });
 
 
