@@ -26,7 +26,8 @@
 > **Hướng dẫn chi tiết API tổng quan kho:** xem [WAREHOUSE_OVERVIEW.md](./WAREHOUSE_OVERVIEW.md)  
 > **Hướng dẫn API tổng quan toàn tổ chức:** xem [ORGANIZATION_OVERVIEW.md](./ORGANIZATION_OVERVIEW.md)  
 > **Hướng dẫn Flutter — số điện thoại kho:** xem [WAREHOUSE_PHONE_FLUTTER.md](./WAREHOUSE_PHONE_FLUTTER.md)  
-> **Notification realtime (WebSocket + inbox):** xem [NOTIFICATION_WS.md](./NOTIFICATION_WS.md) — service riêng port 3001
+> **Notification realtime (WebSocket + inbox):** xem [NOTIFICATION_WS.md](./NOTIFICATION_WS.md) — service riêng port 3001.  
+> **Flutter / client REST (mark-read, inbox):** [NOTIFICATION_REST_CLIENT_GUIDE.md](./NOTIFICATION_REST_CLIENT_GUIDE.md)
 
 ---
 
@@ -486,7 +487,9 @@ Làm mới access token (rotate refresh token).
 
 ### `GET /auth/me`
 
-Lấy thông tin user hiện tại.
+Lấy thông tin user hiện tại kèm danh sách tổ chức (`tenants`).
+
+Danh sách tổ chức dùng cache Redis (`list:user-tenants:{userId}`, TTL 60s), dùng chung với response login. Invalidate khi accept invite hoặc tạo tenant.
 
 **Auth:** Bearer token
 
@@ -509,7 +512,8 @@ Lấy thông tin user hiện tại.
         "code": "ACME",
         "name": "Acme Corp",
         "logoUrl": "http://localhost:9000/inventory/tenants/tenant-id/logo.png",
-        "role": "admin"
+        "role": "admin",
+        "status": "active"
       }
     ]
   }
@@ -1264,8 +1268,8 @@ Mỗi kho chỉ được **post** tồn đầu kỳ **một lần**, và chỉ p
 | `lines[].productId` | string | ✅ |
 | `lines[].qty` | number | ✅ — > 0 |
 | `lines[].unitCost` | number | ✅ — >= 0 |
-| `lines[].batchNo` | string | ❌ | Tùy chọn, dùng khi muốn gắn lô vào dòng tồn đầu kỳ |
-| `lines[].expiryDate` | string | ❌ — ISO date |
+| `lines[].batchNo` | string | ❌ | Tùy chọn; lúc post tạo/tái sử dụng `Batch` |
+| `lines[].expiryDate` | string | ❌ — ngày HSD (parse theo lịch VN) |
 
 **Response 201** — Object `StockOpeningBalance` + `details`
 
@@ -1337,10 +1341,12 @@ draft → submit → pending_approval → approve → approved → complete → 
 | `lines[].expectedQty` | number | ✅ — >= 0 |
 | `lines[].actualQty` | number | ✅ — > 0 |
 | `lines[].unitPrice` | number | ✅ — >= 0 |
-| `lines[].batchNo` | string | ❌ | Tùy chọn, dùng khi muốn gắn lô vào dòng nhập |
-| `lines[].expiryDate` | string | ❌ — ISO datetime |
+| `lines[].batchNo` | string | ❌ | Tùy chọn; lúc complete tạo/tái sử dụng `Batch` theo `(tenant, product, batchNo)` |
+| `lines[].expiryDate` | string | ❌ — ngày HSD (parse theo lịch VN, lưu `@db.Date`) |
 
 **Response 201** — Object `StockReceipt` + `details` (status `draft`, có `code`, `totalAmount`)
+
+> Lô không bắt buộc theo product (không còn `trackBatch`). `manufactureDate` nếu gửi sẽ bị bỏ qua — chưa lưu trên dòng phiếu.
 
 ---
 
@@ -1384,9 +1390,14 @@ Chuyển `pending_approval` → `rejected`.
 
 ### `POST /stock-receipts/:id/complete`
 
-Chuyển `approved` → `completed`, cập nhật tồn kho. Nếu dòng có `batchNo` thì hệ thống tạo/tái sử dụng `Batch` (kèm `unitCost`) và ghi `StockBalance` theo `batchId`. Nhiều dòng cùng sản phẩm + lô được gộp theo **giá vốn bình quân gia quyền**.
+Chuyển `approved` → `completed`, cập nhật tồn kho:
 
-**Lỗi:** `IDEMPOTENT_SKIP` (200) nếu đã complete, `INVALID_STATUS_TRANSITION` (409), `VALIDATION_ERROR` (400) thiếu số lô
+- Có `batchNo` → `ensureBatch` (tạo mới hoặc tái sử dụng), gắn `batchId` vào dòng, tăng `StockBalance` theo lô, cập nhật `Batch.unitCost` bình quân nếu lô đã có tồn.
+- Không `batchNo` → ghi tồn với `batchId = null`.
+- Nhiều dòng cùng sản phẩm + cùng lô trong phiếu được **gộp** (qty cộng, `unitCost` bình quân gia quyền) trước khi posting.
+- Đồng thời cập nhật `product.averageCost` theo weighted average.
+
+**Lỗi:** `IDEMPOTENT_SKIP` (200) nếu đã complete, `INVALID_STATUS_TRANSITION` (409)
 
 ---
 
@@ -1452,11 +1463,13 @@ draft → submit → pending_approval (+ giữ chỗ tồn 24h) → approve → 
 | `lines[].requestedQty` | number | ✅ — > 0 |
 | `lines[].actualQty` | number | ✅ — > 0 |
 | `lines[].unitPrice` | number | ❌ — >= 0 |
-| `lines[].batchId` | string | ❌ — chỉ định lô; nếu bỏ trống hệ thống sẽ phân bổ theo lô còn khả dụng hiện có |
+| `lines[].batchId` | string | ❌ — chỉ định lô cần trừ; bỏ trống → backend tự phân bổ theo lô còn khả dụng |
 
 **Response 201** — Object `StockIssue` + `details` (status `draft`)
 
 **Lỗi:** `VALIDATION_ERROR` (400) — thiếu `customerId` khi xuất bán
+
+> Client gửi `batchId` (id trong bảng `batches`), không gửi `batchNo` trên phiếu xuất. Lấy danh sách lô từ `GET /products/:id/availability`.
 
 ---
 
@@ -1474,7 +1487,9 @@ Sửa phiếu `draft`. Body giống `POST /stock-issues`.
 
 ### `POST /stock-issues/:id/submit`
 
-Kiểm tra tồn khả dụng **theo lô** (khóa `StockBalance` `FOR UPDATE`), phân bổ FEFO/FIFO, tạo `StockReservation` kèm `batchId` (24h), chuyển → `pending_approval`.
+Kiểm tra tồn khả dụng **theo lô** (khóa `StockBalance` `FOR UPDATE`), phân bổ lô, tạo `StockReservation` kèm `batchId` (TTL 24h), chuyển → `pending_approval`.
+
+Thứ tự tự pick (khi không có `batchId`): theo **`Batch.createdAt` ASC** (FIFO theo thời điểm tạo lô). **Chưa** áp dụng FEFO theo `expiryDate`. **Không** chặn lô đã hết hạn khi xuất.
 
 **Lỗi:** `STOCK_INSUFFICIENT` (409)
 
@@ -1482,9 +1497,12 @@ Kiểm tra tồn khả dụng **theo lô** (khóa `StockBalance` `FOR UPDATE`), 
 
 ### `POST /stock-issues/:id/approve` · `reject` · `complete` · `cancel`
 
-Tương tự Stock Receipt. Reject/complete release hoặc consume reservation. Complete phân bổ lô theo thứ tự tồn khả dụng hiện có, ghi `batchId` vào dòng xuất. Giá vốn xuất lấy theo `product.averageCost` trong giao diện mới này.
+- **Reject / cancel:** release reservation.
+- **Complete:** phân bổ lại, trừ `onhand`, consume reservation, ghi ledger. Giá vốn xuất lấy `Batch.unitCost` của lô được pick (không có thì `"0"`). Nếu một dòng tách nhiều lô, `details[].batchId` chỉ được cập nhật khi phân bổ đúng một lô.
 
-**Lỗi complete:** `STOCK_INSUFFICIENT` (409), `EXPIRED_BATCH` (409), `VERSION_CONFLICT` (409)
+**Lỗi complete:** `STOCK_INSUFFICIENT` (409), `VERSION_CONFLICT` (409)
+
+> Chi tiết nghiệp vụ lô/HSD cho Flutter: `docs/STOCK_DOCUMENT_API.md` §10.
 
 ---
 

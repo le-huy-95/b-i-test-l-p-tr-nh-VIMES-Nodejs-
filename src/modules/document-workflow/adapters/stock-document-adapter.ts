@@ -93,7 +93,7 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
         await stockIssueService.cancel(tenantId, documentId, stockActor);
         break;
       case "approved":
-        // Nếu reserve soft-fail → out_of_stock, approve() giữ nguyên (không overwrite).
+        // beforeApprove đã chặn/set out_of_stock; approve() giữ nguyên nếu đã hết hàng.
         await stockIssueService.approve(tenantId, documentId, stockActor);
         break;
       default:
@@ -112,6 +112,18 @@ export class StockIssueDocumentAdapter implements DocumentAdapterPort {
       documentId,
       toStockDocActor(actor),
       trx,
+    );
+  }
+
+  async beforeApprove(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+  ): Promise<void> {
+    await stockIssueService.assertCanApproveOrMarkOutOfStock(
+      tenantId,
+      documentId,
+      toStockDocActor(actor),
     );
   }
 

@@ -4,6 +4,7 @@
  * - toVnDate: lấy ngày lịch VN rồi lưu dạng UTC midnight (phù hợp Prisma @db.Date)
  * - format*: trả ISO có offset +07:00 cho client
  */
+import { Decimal } from './decimal';
 
 const VN_OFFSET_MS = 7 * 60 * 60 * 1000;
 
@@ -70,6 +71,10 @@ function mapValue(key: string | null, value: unknown): unknown {
   }
   if (Array.isArray(value)) {
     return value.map((item) => mapValue(null, item));
+  }
+  // Prisma/decimal.js Decimal is an object; do not Object.entries it into {s,e,d}
+  if (Decimal.isDecimal(value)) {
+    return value;
   }
   if (value && typeof value === 'object' && !(value instanceof Date)) {
     const out: Record<string, unknown> = {};

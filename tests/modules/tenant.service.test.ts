@@ -135,6 +135,76 @@ describe("tenant service", () => {
       code: "T1",
       name: "Tenant 1",
     });
+    expect(mockInvalidate).toHaveBeenCalledWith("list:user-tenants:user-1");
+  });
+
+  it("accepts an invitation and invalidates user tenants list cache", async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: "user-1",
+      name: "Invitee",
+      email: "invitee@example.com",
+      emailVerifiedAt: new Date(),
+      phoneVerifiedAt: null,
+    });
+    mockPrisma.invitation.findUnique.mockResolvedValue({
+      id: "invite-1",
+      tenantId: "tenant-1",
+      email: "invitee@example.com",
+      role: "staff",
+      invitedById: "user-2",
+      expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+      acceptedAt: null,
+      declinedAt: null,
+    });
+    mockPrisma.userTenant.upsert.mockResolvedValue({ id: "ut-1" });
+    mockPrisma.invitation.update.mockResolvedValue({ id: "invite-1" });
+    mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) =>
+      Promise.all(ops),
+    );
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: "tenant-1",
+      name: "Tenant 1",
+    });
+    mockPrisma.invitation.findMany.mockResolvedValue([]);
+
+    const { tenantService } =
+      await import("../../src/modules/tenant/tenant.service");
+    const result = await tenantService.acceptInvite("user-1", {
+      invitationId: "invite-1",
+    });
+
+    expect(result).toEqual({ tenantId: "tenant-1", role: "staff" });
+    expect(mockInvalidate).toHaveBeenCalledWith("list:user-tenants:user-1");
+    expect(mockInvalidate).toHaveBeenCalledWith("user-1", "tenant-1");
+  });
+
+  it("rejects invite when email is not registered", async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: "tenant-1",
+      name: "Tenant 1",
+    });
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: "user-1",
+      name: "Inviter",
+      email: "inviter@example.com",
+    });
+    mockPrisma.user.findFirst.mockResolvedValue(null);
+
+    const { tenantService } =
+      await import("../../src/modules/tenant/tenant.service");
+
+    await expect(
+      tenantService.invite("tenant-1", "user-1", {
+        email: "unknown@example.com",
+        role: "staff",
+      }),
+    ).rejects.toMatchObject({
+      code: "EMAIL_NOT_FOUND",
+      statusCode: 404,
+      message: "Email không tồn tại",
+    });
+    expect(mockPrisma.invitation.create).not.toHaveBeenCalled();
+    expect(mockSendInviteEmail).not.toHaveBeenCalled();
   });
 
   it("invites a user and sends invite email", async () => {
@@ -147,7 +217,7 @@ describe("tenant service", () => {
       name: "Inviter",
       email: "inviter@example.com",
     });
-    mockPrisma.user.findFirst.mockResolvedValue(null);
+    mockPrisma.user.findFirst.mockResolvedValue({ id: "user-2" });
     mockPrisma.invitation.create.mockResolvedValue({ id: "invite-1" });
     mockSendInviteEmail.mockResolvedValue({ success: true });
 
@@ -163,6 +233,7 @@ describe("tenant service", () => {
       email: "invitee@example.com",
     });
     expect(mockSendInviteEmail).toHaveBeenCalledTimes(1);
+    expect(mockPublishTenantNotification).toHaveBeenCalled();
     expect(mockInvalidatePattern).toHaveBeenCalled();
   });
 
@@ -189,7 +260,7 @@ describe("tenant service", () => {
       email: "invitee@example.com",
       role: "staff",
       invitedById: "user-2",
-      expiresAt: new Date("2026-08-20T10:00:00.000Z"),
+      expiresAt: new Date("2099-08-20T10:00:00.000Z"),
       acceptedAt: null,
       declinedAt: null,
       createdAt: new Date("2026-08-19T10:00:00.000Z"),
@@ -360,7 +431,7 @@ describe("tenant service", () => {
         id: "inv-1",
         email: "invitee@example.com",
         role: "staff",
-        expiresAt: new Date("2026-08-20T10:00:00.000Z"),
+        expiresAt: new Date("2099-08-20T10:00:00.000Z"),
         createdAt: new Date("2026-08-19T10:00:00.000Z"),
         tenant: { id: "tenant-1", name: "Tenant 1" },
         invitedBy: {
@@ -373,7 +444,7 @@ describe("tenant service", () => {
         id: "inv-2",
         email: "me@example.com",
         role: "staff",
-        expiresAt: new Date("2026-08-21T10:00:00.000Z"),
+        expiresAt: new Date("2099-08-21T10:00:00.000Z"),
         createdAt: new Date("2026-08-18T10:00:00.000Z"),
         tenant: { id: "tenant-2", name: "Tenant 2" },
         invitedBy: {

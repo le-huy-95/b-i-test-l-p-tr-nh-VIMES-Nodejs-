@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   STOCK_DOC_FULL_ACCESS_ROLES,
   buildRelatedDocumentWhere,
+  buildRelatedWorkflowWhere,
   resolveStockDocVisibilityScope,
   stockDocListCacheVisibilityKey,
 } from "../../src/modules/stock-balance/stock-doc-visibility";
@@ -31,6 +32,20 @@ describe("stock-doc-visibility", () => {
         { approvedById: "user-1" },
         { id: { in: ["doc-a", "doc-b"] } },
       ],
+    });
+  });
+
+  it("builds related workflow where from step assignee/signer fields", () => {
+    expect(buildRelatedWorkflowWhere("user-1")).toEqual({
+      steps: {
+        some: {
+          OR: [
+            { assignedApproverId: "user-1" },
+            { requiredSignerId: "user-1" },
+            { actualSignerId: "user-1" },
+          ],
+        },
+      },
     });
   });
 

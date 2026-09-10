@@ -21,6 +21,7 @@ const masterPrefixes = [
 /** Prefix khi chứng từ nhập/xuất/tồn đầu kỳ thay đổi */
 const stockDocPrefixes = [
   'list:stock-receipts',
+  'detail:stock-receipts',
   'list:stock-issues',
   'list:stock-openings',
   'report:warehouse-overview',

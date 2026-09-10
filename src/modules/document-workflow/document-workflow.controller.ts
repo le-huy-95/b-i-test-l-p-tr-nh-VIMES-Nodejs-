@@ -18,7 +18,11 @@ import {
 export class DocumentWorkflowController {
   list = async (req: Request, res: Response) => {
     const query = workflowListQuerySchema.parse(req.query);
-    const data = await documentWorkflowService.listWorkflows(req.tenant!.id, query);
+    const data = await documentWorkflowService.listWorkflows(
+      req.tenant!.id,
+      query,
+      { userId: req.user!.id, role: req.tenant!.role },
+    );
     res.json({ success: true, data });
   };
 

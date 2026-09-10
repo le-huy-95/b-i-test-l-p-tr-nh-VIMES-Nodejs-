@@ -54,6 +54,8 @@ Local: `http://localhost:3001/api/v1`
 
 Auth: `Authorization: Bearer <accessToken>` (cùng JWT với Business API)
 
+> **Client guide đã verify (list / detail auto-read / mark-read):** [NOTIFICATION_REST_CLIENT_GUIDE.md](./NOTIFICATION_REST_CLIENT_GUIDE.md)
+
 ### `GET /notifications/unread-count`
 
 ```json

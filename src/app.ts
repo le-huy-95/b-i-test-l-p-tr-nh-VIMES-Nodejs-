@@ -11,7 +11,8 @@
 import express, { Application } from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type { Request } from "express";
 import pinoHttp from "pino-http";
 import pino from "pino";
 import routes from "./routes";
@@ -21,8 +22,19 @@ import { env } from "./config/env";
 
 const app: Application = express();
 
-// Đứng sau Cloudflare/reverse proxy — cần để rate-limit lấy đúng IP client
-app.set("trust proxy", 1);
+// Cloudflare Tunnel → localhost: cloudflared + CF. Trust vài hop để req.ip đúng.
+app.set("trust proxy", 2);
+
+/** IP thật qua tunnel: CF-Connecting-IP → XFF → req.ip (tránh gom cả tunnel vào 127.0.0.1). */
+function rateLimitClientIp(req: Request): string {
+  const cf = req.headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.trim()) return cf.trim();
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.trim()) {
+    return xff.split(",")[0]?.trim() || req.ip || "unknown";
+  }
+  return req.ip || "unknown";
+}
 
 // Logger structured JSON; dev dùng pino-pretty để dễ đọc
 const logger = pino({
@@ -52,6 +64,7 @@ const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(rateLimitClientIp(req)),
   message: {
     success: false,
     error: { code: "RATE_LIMITED", message: "Too many requests" },

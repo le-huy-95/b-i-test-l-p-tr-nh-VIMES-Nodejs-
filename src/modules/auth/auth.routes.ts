@@ -4,8 +4,8 @@
  * Đăng ký, OTP, đăng nhập (email/Google), refresh token, logout, thiết bị.
  * Có rate-limit riêng cho login/OTP/register. Một số route tenant được mount tại đây.
  */
-import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import { Router, type Request } from 'express';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { authMiddleware, requirePlatformAdmin } from '../../middlewares/auth';
 import { asyncHandler } from '../../middlewares/errorHandler';
 import { authController } from './auth.controller';
@@ -13,11 +13,24 @@ import { tenantController } from '../tenant/tenant.controller';
 
 const router = Router();
 
+function rateLimitClientIp(req: Request): string {
+  const cf = req.headers['cf-connecting-ip'];
+  if (typeof cf === 'string' && cf.trim()) return cf.trim();
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) {
+    return xff.split(',')[0]?.trim() || req.ip || 'unknown';
+  }
+  return req.ip || 'unknown';
+}
+
+const authKeyGenerator = (req: Request) => ipKeyGenerator(rateLimitClientIp(req));
+
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: authKeyGenerator,
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many login attempts, try again later' } },
 });
 
@@ -26,6 +39,7 @@ const otpLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: authKeyGenerator,
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many OTP requests, try again later' } },
 });
 
@@ -34,6 +48,7 @@ const registerLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: authKeyGenerator,
   message: { success: false, error: { code: 'RATE_LIMITED', message: 'Too many registration attempts' } },
 });
 

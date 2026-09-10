@@ -52,6 +52,24 @@ export function buildRelatedDocumentWhere(
   };
 }
 
+/**
+ * Filter Prisma cho danh sách workflow: chỉ phiếu có bước liên quan user
+ * (người lập / được gán duyệt / đã ký).
+ */
+export function buildRelatedWorkflowWhere(userId: string) {
+  return {
+    steps: {
+      some: {
+        OR: [
+          { assignedApproverId: userId },
+          { requiredSignerId: userId },
+          { actualSignerId: userId },
+        ],
+      },
+    },
+  };
+}
+
 export async function loadWorkflowRelatedDocumentIds(
   db: PrismaClient,
   tenantId: string,

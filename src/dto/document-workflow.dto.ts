@@ -50,11 +50,20 @@ export const uploadAuthorizationSchema = z.object({
   note: z.string().optional(),
 });
 
+/* Empty/whitespace string → undefined (omit filter) */
+const optionalTrimmedString = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}, z.string().optional());
+
 /* Tham số lọc/phân trang danh sách workflow */
 export const workflowListQuerySchema = z.object({
   documentType: documentTypeSchema.optional(),
   status: z.enum(['draft', 'in_review', 'approved', 'rejected', 'cancelled', 'completed']).optional(),
   assignedApproverId: z.string().optional(),
+  warehouseId: optionalTrimmedString,
+  search: optionalTrimmedString,
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(200).default(20),
 });

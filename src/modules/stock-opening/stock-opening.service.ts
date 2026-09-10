@@ -74,17 +74,64 @@ export class StockOpeningService {
     });
 
     const adapter = getDocumentAdapter("stock_opening");
+    const actor = { userId, name: undefined };
     await documentWorkflowService.initWorkflow(
       tenantId,
       "stock_opening",
       created.id,
-      { userId, name: undefined },
+      actor,
       adapter,
       data.workflowAssignedApproverIds,
     );
+    await documentWorkflowService.startReviewOnCreate(
+      tenantId,
+      "stock_opening",
+      created.id,
+      actor,
+      adapter,
+    );
 
+    const workflow = await documentWorkflowService.getWorkflow(
+      tenantId,
+      "stock_opening",
+      created.id,
+    );
     await cacheInvalidationService.invalidateStockDocuments(tenantId);
-    return withVnTimestamps(created);
+    return withVnTimestamps({
+      ...created,
+      workflowStatus: workflow.status,
+      currentStepCode: workflow.currentStepCode,
+    });
+  }
+
+  /** draft → pending_approval sau duyệt bước đầu sau creator */
+  async markPendingApproval(
+    tenantId: string,
+    id: string,
+    _actor: { userId: string },
+  ) {
+    const doc = await this.db.stockOpeningBalance.findFirst({
+      where: { id, tenantId },
+      include: { details: true },
+    });
+    if (!doc) throw new AppError("NOT_FOUND", 404, "Opening not found");
+    if (doc.status === "pending_approval") {
+      return withVnTimestamps(doc);
+    }
+    if (doc.status !== "draft") {
+      throw new AppError(
+        "INVALID_STATUS_TRANSITION",
+        409,
+        "Only draft openings can enter pending_approval",
+      );
+    }
+    const result = await this.db.stockOpeningBalance.update({
+      where: { id },
+      data: { status: "pending_approval" },
+      include: { details: true },
+    });
+    await cacheInvalidationService.invalidateStockDocuments(tenantId);
+    return withVnTimestamps(result);
   }
 
   async post(tenantId: string, id: string, userId: string) {

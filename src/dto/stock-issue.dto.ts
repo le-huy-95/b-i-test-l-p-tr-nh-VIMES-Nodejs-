@@ -29,6 +29,7 @@ export const createStockIssueSchema = z.object({
   issueType: issueTypeSchema,
   customerId: z.string().optional(),
   issueDate: z.string(),
+  deliveredByName: z.string().optional(),
   note: z.string().optional(),
   workflowAssignedApproverIds: z.array(z.string().min(1)).optional(),
   lines: z.array(stockIssueLineSchema).min(1),

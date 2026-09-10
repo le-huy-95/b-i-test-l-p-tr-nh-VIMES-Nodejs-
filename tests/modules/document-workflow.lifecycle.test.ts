@@ -62,6 +62,8 @@ vi.mock('../../src/shared/notifications/stock-doc-notify', () => ({
   notifyIssueRejected: vi.fn(),
   notifyIssueCompleted: vi.fn(),
   notifyIssueCancelled: vi.fn(),
+  notifyIssueOutOfStock: vi.fn(),
+  notifyIssueStockAvailable: vi.fn(),
   notifyReceiptSubmitted: vi.fn(),
   notifyReceiptApproved: vi.fn(),
   notifyReceiptRejected: vi.fn(),

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Decimal } from '../../src/utils/decimal';
 import {
   formatVnDateOnly,
   formatVnDateTime,
@@ -99,5 +100,21 @@ describe('withVnTimestamps', () => {
       receiptDate: '2026-09-07T00:00:00.000+07:00',
     });
     expect(withVnTimestamps(once)).toEqual(once);
+  });
+
+  it('preserves Decimal amounts so JSON stays numeric strings', () => {
+    const totalAmount = new Decimal('4250000.00');
+    const unitPrice = new Decimal('1000.5');
+    const payload = withVnTimestamps({
+      totalAmount,
+      createdAt: new Date('2026-09-07T10:00:00.000Z'),
+      details: [{ unitPrice, lineAmount: new Decimal('2001.00') }],
+    });
+
+    expect(payload.totalAmount).toBe(totalAmount);
+    expect(payload.details[0].unitPrice).toBe(unitPrice);
+    expect(JSON.stringify(payload)).toContain('"totalAmount":"4250000"');
+    expect(JSON.stringify(payload)).not.toContain('"s":');
+    expect(payload.createdAt).toBe('2026-09-07T17:00:00.000+07:00');
   });
 });

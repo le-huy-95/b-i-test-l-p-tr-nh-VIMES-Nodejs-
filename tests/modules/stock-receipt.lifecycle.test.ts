@@ -52,7 +52,7 @@ describe('stock receipt lifecycle', () => {
     mockPrisma.stockReceipt.create.mockReset();
   });
 
-  it('submits and approves a receipt', async () => {
+  it('markPendingApproval and approves a receipt', async () => {
     mockPrisma.stockReceipt.findFirst.mockResolvedValue({
       id: 'receipt-1',
       tenantId: 'tenant-1',
@@ -66,7 +66,7 @@ describe('stock receipt lifecycle', () => {
 
     const { stockReceiptService } = await import('../../src/modules/stock-receipt/stock-receipt.service');
     const actor = { userId: 'user-1', name: 'Tester' };
-    const submitted = await stockReceiptService.submit('tenant-1', 'receipt-1', actor);
+    const submitted = await stockReceiptService.markPendingApproval('tenant-1', 'receipt-1', actor);
 
     expect(submitted).toMatchObject({ status: 'pending_approval' });
 

@@ -34,6 +34,24 @@ export interface DocumentAdapterPort {
     trx: Prisma.TransactionClient,
   ): Promise<void>;
 
+  /** Lần duyệt đầu tiên sau bước creator → phiếu draft → pending_approval */
+  onEnteredPendingApproval(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+    trx: Prisma.TransactionClient,
+  ): Promise<void>;
+
+  /**
+   * Hook trước khi ghi nhận bước approve/proxy_sign.
+   * Phiếu xuất: kiểm tra tồn; hết hàng → set out_of_stock và ném lỗi (chặn duyệt).
+   */
+  beforeApprove?(
+    tenantId: string,
+    documentId: string,
+    actor: WorkflowActor,
+  ): Promise<void>;
+
   onComplete(
     tenantId: string,
     documentId: string,

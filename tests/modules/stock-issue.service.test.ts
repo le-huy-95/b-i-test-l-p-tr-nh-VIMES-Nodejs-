@@ -45,6 +45,8 @@ vi.mock('../../src/shared/notifications/stock-doc-notify', () => ({
   notifyIssueRejected: vi.fn(),
   notifyIssueCompleted: vi.fn(),
   notifyIssueCancelled: vi.fn(),
+  notifyIssueOutOfStock: vi.fn(),
+  notifyIssueStockAvailable: vi.fn(),
 }));
 
 vi.mock('../../src/modules/document-workflow/document-workflow.service', () => ({
@@ -213,7 +215,7 @@ describe('stock issue service', () => {
       },
     };
 
-    mockTransaction.mockImplementation(async (cb: (trx: typeof trx) => Promise<unknown>) => cb(trx));
+    mockTransaction.mockImplementation(async (cb: (t: typeof trx) => Promise<unknown>) => cb(trx));
 
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
 
@@ -302,7 +304,7 @@ describe('stock issue service', () => {
       },
     };
 
-    mockTransaction.mockImplementation(async (cb: (trx: typeof trx) => Promise<unknown>) => cb(trx));
+    mockTransaction.mockImplementation(async (cb: (t: typeof trx) => Promise<unknown>) => cb(trx));
 
     const { stockIssueService } = await import('../../src/modules/stock-issue/stock-issue.service');
     const actor = { userId: 'user-1', name: 'Tester' };

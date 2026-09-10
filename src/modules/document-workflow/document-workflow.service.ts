@@ -27,6 +27,11 @@ import {
   computeDocumentStatus,
 } from "./workflow-state-machine";
 import { cacheInvalidationService } from "../../infra/cache-invalidation";
+import {
+  buildRelatedWorkflowWhere,
+  resolveStockDocVisibilityScope,
+  type StockDocVisibilityActor,
+} from "../stock-balance/stock-doc-visibility";
 
 function assertActorAssignedToStep(
   step: { assignedApproverId?: string | null },
@@ -307,7 +312,7 @@ export class DocumentWorkflowService {
     );
   }
 
-  /** Danh sách workflow có phân trang, lọc theo loại chứng từ/trạng thái/người duyệt */
+  /** Danh sách workflow có phân trang, lọc theo loại chứng từ/trạng thái/người duyệt + visibility */
   async listWorkflows(
     tenantId: string,
     query: {
@@ -319,6 +324,7 @@ export class DocumentWorkflowService {
       page?: number;
       limit?: number;
     },
+    actor: StockDocVisibilityActor,
   ): Promise<{
     data: WorkflowDocumentResult[];
     pagination: {
@@ -336,13 +342,28 @@ export class DocumentWorkflowService {
     const where: Record<string, unknown> = { tenantId };
     if (query.documentType) where.documentType = query.documentType;
     if (query.status) where.status = query.status;
+
+    const andFilters: Record<string, unknown>[] = [];
     if (query.assignedApproverId) {
-      where.steps = {
-        some: {
-          assignedApproverId: query.assignedApproverId,
-          status: "pending",
+      andFilters.push({
+        steps: {
+          some: {
+            assignedApproverId: query.assignedApproverId,
+            status: "pending",
+          },
         },
-      };
+      });
+    }
+
+    const scope = resolveStockDocVisibilityScope(actor.role);
+    if (scope === "related_documents") {
+      andFilters.push(buildRelatedWorkflowWhere(actor.userId));
+    }
+
+    if (andFilters.length === 1) {
+      Object.assign(where, andFilters[0]);
+    } else if (andFilters.length > 1) {
+      where.AND = andFilters;
     }
 
     if (warehouseId || search) {
@@ -927,6 +948,14 @@ export class DocumentWorkflowService {
     actor: WorkflowActor,
     adapter: DocumentAdapterPort,
   ): Promise<WorkflowDocumentResult> {
+    if (adapter.beforeApprove) {
+      await adapter.beforeApprove(
+        workflow.tenantId,
+        workflow.documentId,
+        actor,
+      );
+    }
+
     const now = new Date();
 
     const updatedStep = await trx.documentWorkflowStep.update({
@@ -1234,6 +1263,14 @@ export class DocumentWorkflowService {
           `Authorization ${auth.authorizationNo} has no attached file`,
         );
       }
+    }
+
+    if (adapter.beforeApprove) {
+      await adapter.beforeApprove(
+        workflow.tenantId,
+        workflow.documentId,
+        actor,
+      );
     }
 
     const updatedStep = await trx.documentWorkflowStep.update({

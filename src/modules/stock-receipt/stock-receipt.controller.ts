@@ -32,7 +32,12 @@ export class StockReceiptController {
   };
 
   update = async (req: Request, res: Response) => {
-    const data = await stockReceiptService.update(req.tenant!.id, req.params.id as string, req.body);
+    const data = await stockReceiptService.update(
+      req.tenant!.id,
+      req.params.id as string,
+      req.user!.id,
+      req.body,
+    );
     res.json({ success: true, data });
   };
 

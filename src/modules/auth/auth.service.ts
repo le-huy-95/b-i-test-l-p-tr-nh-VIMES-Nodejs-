@@ -23,11 +23,24 @@ import type { TokenIssuer } from "./token.port";
 import type { DeviceRegistry } from "./device.port";
 import type { GoogleTokenVerifier } from "./google-auth.port";
 import { googleAuth } from "../../infra/firebase-google-auth";
+import { listCache as defaultListCache } from "../../infra/redis-list-cache";
+import type { ListCache } from "../common/list-cache.port";
+import { userTenantsCacheKey } from "./user-tenants-cache";
 import { NOTIFICATION_EVENT_TYPES } from "../../shared/notifications/event-types";
 import {
   actorLabel,
   publishTenantNotification,
 } from "../../shared/notifications/publish";
+
+/** DTO tổ chức trong danh sách membership của user (login + /auth/me). */
+type UserTenantListItem = {
+  id: string;
+  code: string;
+  name: string;
+  logoUrl: string | null;
+  role: string;
+  status: string;
+};
 
 /** Lớp dịch vụ xác thực — điều phối luồng người dùng từ đăng ký đến phiên. */
 export class AuthService {
@@ -37,6 +50,7 @@ export class AuthService {
     private readonly tokens: TokenIssuer = tokenService,
     private readonly devices: DeviceRegistry = deviceService,
     private readonly google: GoogleTokenVerifier = googleAuth,
+    private readonly listCache: ListCache = defaultListCache,
   ) {}
 
   /** Đăng ký tài khoản mới; gửi OTP xác minh email nếu có email. */
@@ -162,6 +176,14 @@ export class AuthService {
       );
     }
 
+    if (!decoded.email_verified) {
+      throw new AppError(
+        "GOOGLE_EMAIL_NOT_VERIFIED",
+        403,
+        "Google account email must be verified",
+      );
+    }
+
     const email = normalizeEmail(decoded.email);
     const googleId = decoded.uid;
 
@@ -180,13 +202,17 @@ export class AuthService {
             "Email already linked to another Google account",
           );
         }
+        if (!byEmail.emailVerifiedAt) {
+          throw new AppError(
+            "EMAIL_NOT_VERIFIED",
+            403,
+            "Verify email before linking Google Sign-In",
+          );
+        }
         user = await this.db.user.update({
           where: { id: byEmail.id },
           data: {
             googleId,
-            ...(decoded.email_verified && !byEmail.emailVerifiedAt
-              ? { emailVerifiedAt: new Date() }
-              : {}),
             ...(decoded.name && !byEmail.name ? { name: decoded.name } : {}),
           },
         });
@@ -197,7 +223,7 @@ export class AuthService {
             email,
             name: decoded.name ?? null,
             passwordHash: await hashPassword(randomToken()),
-            emailVerifiedAt: decoded.email_verified ? new Date() : null,
+            emailVerifiedAt: new Date(),
           },
         });
       }
@@ -228,14 +254,31 @@ export class AuthService {
   async me(userId: string) {
     const user = await this.db.user.findUnique({ where: { id: userId } });
     if (!user) throw new AppError("NOT_FOUND", 404, "User not found");
-    return this.buildProfileResponse(user);
+    const tenants = await this.listUserTenants(userId);
+    return {
+      ...this.buildProfileResponse(user),
+      tenants,
+    };
   }
 
-  /** Truy vấn danh sách tenant mà người dùng đang tham gia (active). */
-  private async buildTenantMemberships(userId: string) {
-    return this.db.userTenant.findMany({
-      where: { userId, isActive: true },
-      include: { tenant: true },
+  /**
+   * Danh sách tổ chức active của user — cache-aside Redis.
+   * Miss: query DB rồi set; hit: trả cache; Redis lỗi: fallback DB.
+   */
+  private async listUserTenants(userId: string): Promise<UserTenantListItem[]> {
+    return this.listCache.getOrSet(userTenantsCacheKey(userId), async () => {
+      const rows = await this.db.userTenant.findMany({
+        where: { userId, isActive: true },
+        include: { tenant: true },
+      });
+      return rows.map((t) => ({
+        id: t.tenant.id,
+        code: t.tenant.code,
+        name: t.tenant.name,
+        logoUrl: t.tenant.logoUrl,
+        role: t.role,
+        status: t.tenant.status,
+      }));
     });
   }
 
@@ -255,15 +298,15 @@ export class AuthService {
   }) {
     const [tokens, tenants] = await Promise.all([
       this.tokens.issueTokens(user.id, user.tokenVersion),
-      this.buildTenantMemberships(user.id),
+      this.listUserTenants(user.id),
     ]);
 
     const loginUserName = actorLabel(user);
     await Promise.all(
-      tenants.map((membership) =>
+      tenants.map((tenant) =>
         publishTenantNotification({
           eventType: NOTIFICATION_EVENT_TYPES.USER_LOGIN,
-          tenantId: membership.tenantId,
+          tenantId: tenant.id,
           actorUserId: user.id,
           actorName: loginUserName,
           source: { type: "user", id: user.id },
@@ -272,10 +315,10 @@ export class AuthService {
             title: "Thành viên đăng nhập",
             body: `${loginUserName} vừa đăng nhập vào hệ thống`,
             targetType: "tenant_list",
-            targetId: membership.tenantId,
+            targetId: tenant.id,
             routeName: "tenant_members",
-            routeParams: { tenantId: membership.tenantId },
-            deeplink: `myapp://tenants/${membership.tenantId}/members`,
+            routeParams: { tenantId: tenant.id },
+            deeplink: `myapp://tenants/${tenant.id}/members`,
           },
         }),
       ),
@@ -283,14 +326,7 @@ export class AuthService {
 
     return {
       user: this.buildProfileResponse(user),
-      tenants: tenants.map((t) => ({
-        id: t.tenant.id,
-        code: t.tenant.code,
-        name: t.tenant.name,
-        logoUrl: t.tenant.logoUrl,
-        role: t.role,
-        status: t.tenant.status,
-      })),
+      tenants,
       ...tokens,
     };
   }
@@ -324,4 +360,5 @@ export const authService = new AuthService(
   tokenService,
   deviceService,
   googleAuth,
+  defaultListCache,
 );

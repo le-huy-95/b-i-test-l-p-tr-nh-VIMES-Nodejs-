@@ -2,6 +2,8 @@
 
 > Tài liệu này tổng hợp toàn bộ những gì frontend (Flutter / Web / React / Vue) cần làm
 > để tích hợp với hệ thống notification realtime của backend.
+>
+> **Contract REST đã verify (2026-09-09):** xem [NOTIFICATION_REST_CLIENT_GUIDE.md](./NOTIFICATION_REST_CLIENT_GUIDE.md) — dùng file đó khi sửa mark-read / inbox.
 
 ---
 
@@ -181,6 +183,8 @@ Content-Type: application/json
 - `notificationIds` + `markAll: false` → đánh dấu theo ID cụ thể
 - `markAll: true` → đánh dấu tất cả chưa đọc
 - `tenantId` → lọc theo tenant (optional)
+- `markAll` phải là **boolean JSON** (`true` / `false`), không phải `"true"` string
+- Sai tên field (ví dụ `ids` thay vì `notificationIds`) → HTTP 200 nhưng `updated: 0` (silent no-op)
 
 **Response:**
 
@@ -193,6 +197,8 @@ Content-Type: application/json
   }
 }
 ```
+
+Chi tiết + checklist FE: [NOTIFICATION_REST_CLIENT_GUIDE.md](./NOTIFICATION_REST_CLIENT_GUIDE.md).
 
 ---
 
@@ -286,7 +292,10 @@ interface NotificationItem {
 |--------|-------------|------------|-------|
 | `invitation_created` | `tenant_invitation` | — | Lời mời vào tenant |
 | `invitation_accepted` | `tenant_invitation` | — | Lời mời được chấp nhận |
+| `invitation_declined` | `tenant_invitation` | — | Lời mời bị từ chối |
 | `membership_removed` | `tenant_list` | — | Thành viên bị xóa |
+| `user_created` | — | — | User nội bộ được tạo |
+| `user_login` | — | — | User đăng nhập |
 | `receipt_submitted` | `stock_receipt` | `stock_receipt_detail` | Phiếu nhập chờ duyệt |
 | `receipt_approved` | `stock_receipt` | `stock_receipt_detail` | Phiếu nhập đã duyệt |
 | `receipt_rejected` | `stock_receipt` | `stock_receipt_detail` | Phiếu nhập bị từ chối |
@@ -297,6 +306,8 @@ interface NotificationItem {
 | `issue_rejected` | `stock_issue` | `stock_issue_detail` | Phiếu xuất bị từ chối |
 | `issue_completed` | `stock_issue` | `stock_issue_detail` | Phiếu xuất hoàn tất |
 | `issue_cancelled` | `stock_issue` | `stock_issue_detail` | Phiếu xuất bị hủy |
+| `issue_out_of_stock` | `stock_issue` | `stock_issue_detail` | Phiếu xuất hết hàng |
+| `issue_stock_available` | `stock_issue` | `stock_issue_detail` | Phiếu xuất có hàng lại |
 
 ### 4.3 `routeParams` theo `routeName`
 

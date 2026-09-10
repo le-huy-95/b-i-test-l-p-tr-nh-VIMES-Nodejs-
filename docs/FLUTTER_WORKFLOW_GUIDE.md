@@ -492,7 +492,7 @@ Không nên tự suy diễn quá nhiều ở frontend. Luôn ưu tiên:
 - `expectedQty >= 0`
 - `actualQty > 0`
 - `unitPrice >= 0`
-- `batchNo` nếu product track batch
+- `batchNo` / `expiryDate` tùy chọn trên từng dòng nhập (không còn cờ track batch trên product)
 
 ### 9.3 Phiếu đầu kỳ
 

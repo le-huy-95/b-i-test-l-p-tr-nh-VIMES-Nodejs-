@@ -46,14 +46,16 @@ Base URL (dev):
         "code": "ACME",
         "name": "Acme Corp",
         "logoUrl": "http://localhost:9000/inventory/tenants/tenant-id-1/logo.png",
-        "role": "admin"
+        "role": "admin",
+        "status": "active"
       },
       {
         "id": "tenant-id-2",
         "code": "SHOP01",
         "name": "Cửa hàng ABC",
         "logoUrl": null,
-        "role": "viewer"
+        "role": "viewer",
+        "status": "active"
       }
     ]
   }
@@ -70,10 +72,9 @@ curl -X GET https://api.kimbap.io.vn/api/v1/auth/me \
 **Ghi chú:**
 
 - Chỉ trả về membership **đang active** (`isActive = true`).
-- Mỗi phần tử trong `tenants` gồm: `id`, `code`, `name`, `logoUrl`, `role`.
+- Mỗi phần tử trong `tenants` gồm: `id`, `code`, `name`, `logoUrl`, `role`, `status`.
 - `logoUrl`: URL logo tổ chức trên MinIO; `null` nếu chưa upload.
-- Response **không** có field `status` của tenant (khác với response login).
-
+- Danh sách `tenants` được **cache Redis** (key `list:user-tenants:{userId}`, TTL 60s). Lần đầu query DB rồi ghi cache; các lần sau đọc cache. Cache bị xóa (lazy delete) khi user **accept lời mời** hoặc **tạo tổ chức mới** — lần gọi tiếp theo sẽ query DB lại.
 ---
 
 ## Cách 2 — Lấy danh sách khi đăng nhập

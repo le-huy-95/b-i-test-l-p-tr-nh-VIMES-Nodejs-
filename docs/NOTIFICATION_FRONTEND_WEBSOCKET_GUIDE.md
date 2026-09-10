@@ -267,8 +267,9 @@ Code trên sẽ luôn gọi vào `/socket.io/`, trong khi backend hiện tại k
 ### 7.3 Khi user tap notification
 
 - Navigate đến màn hình liên quan
-- Gọi `GET /notifications/:id` → server **tự động** đánh dấu đã đọc, trả về `{ item, unreadCount }`
-- (Hoặc gọi `POST /notifications/mark-read` nếu muốn mark thủ công)
+- Gọi `GET /api/v1/notifications/:id` → server **tự động** đánh dấu đã đọc, trả về `{ item, unreadCount }`
+- (Hoặc gọi `POST /api/v1/notifications/mark-read` nếu muốn mark thủ công)
+- Contract REST đầy đủ + checklist lỗi FE: [NOTIFICATION_REST_CLIENT_GUIDE.md](./NOTIFICATION_REST_CLIENT_GUIDE.md)
 - Cập nhật local state
 
 ### 7.4 Khi app background / logout

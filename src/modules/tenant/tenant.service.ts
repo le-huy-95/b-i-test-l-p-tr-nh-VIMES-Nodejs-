@@ -37,6 +37,7 @@ import {
   publishTenantNotification,
 } from "../../shared/notifications/publish";
 import { notifyInvitationCreated } from "../../shared/notifications/direct-notify";
+import { userTenantsCacheKey } from "../auth/user-tenants-cache";
 
 function assertVerified(user: {
   emailVerifiedAt: Date | null;
@@ -172,6 +173,8 @@ export class TenantService {
       },
     });
 
+    await this.listCache.invalidate(userTenantsCacheKey(userId));
+
     return tenant;
   }
 
@@ -185,6 +188,14 @@ export class TenantService {
     ]);
     if (!tenant) throw new AppError("NOT_FOUND", 404, "Tenant not found");
     if (!inviter) throw new AppError("NOT_FOUND", 404, "User not found");
+
+    const invitee = await this.db.user.findFirst({
+      where: { email: { equals: data.email, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (!invitee) {
+      throw new AppError("EMAIL_NOT_FOUND", 404, "Email không tồn tại");
+    }
 
     const invitation = await this.db.invitation.create({
       data: {
@@ -207,22 +218,15 @@ export class TenantService {
       userId: inviterId,
     });
 
-    const invitee = await this.db.user.findFirst({
-      where: { email: { equals: data.email, mode: "insensitive" } },
-      select: { id: true },
+    const inviterName = actorLabel(inviter);
+    await notifyInvitationCreated({
+      userId: invitee.id,
+      invitationId: invitation.id,
+      tenantId,
+      tenantName: tenant.name,
+      inviterId,
+      inviterName,
     });
-
-    if (invitee) {
-      const inviterName = actorLabel(inviter);
-      await notifyInvitationCreated({
-        userId: invitee.id,
-        invitationId: invitation.id,
-        tenantId,
-        tenantName: tenant.name,
-        inviterId,
-        inviterName,
-      });
-    }
 
     await this.invalidatePeopleCaches(tenantId);
 
@@ -285,6 +289,7 @@ export class TenantService {
     ]);
 
     await this.cache.invalidate(userId, invitation.tenantId);
+    await this.listCache.invalidate(userTenantsCacheKey(userId));
     await this.invalidatePeopleCaches(invitation.tenantId);
     await this.refreshInvitationListCache(invitation.tenantId, userId);
 

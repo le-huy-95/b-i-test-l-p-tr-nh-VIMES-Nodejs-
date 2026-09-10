@@ -32,9 +32,28 @@ const mockPrisma = {
 const mockSendOtpEmail = vi.fn();
 const mockVerifyGoogleIdToken = vi.fn();
 const mockPublishTenantNotification = vi.fn().mockResolvedValue(undefined);
+const mockCacheGet = vi.fn();
+const mockCacheSet = vi.fn();
+const mockCacheInvalidate = vi.fn();
 
 vi.mock('../../src/infra/prisma', () => ({
   prisma: mockPrisma,
+}));
+
+vi.mock('../../src/infra/redis-list-cache', () => ({
+  listCache: {
+    get: mockCacheGet,
+    set: mockCacheSet,
+    invalidate: mockCacheInvalidate,
+    invalidatePattern: vi.fn(),
+    getOrSet: async (key: string, loader: () => Promise<unknown>) => {
+      const cached = await mockCacheGet(key);
+      if (cached != null) return cached;
+      const value = await loader();
+      await mockCacheSet(key, value);
+      return value;
+    },
+  },
 }));
 
 vi.mock('../../src/services/email', () => ({
@@ -80,6 +99,10 @@ describe('auth service', () => {
     mockSendOtpEmail.mockReset();
     mockVerifyGoogleIdToken.mockReset();
     mockPublishTenantNotification.mockReset();
+    mockCacheGet.mockReset();
+    mockCacheSet.mockReset();
+    mockCacheInvalidate.mockReset();
+    mockCacheGet.mockResolvedValue(null);
     for (const model of Object.values(mockPrisma)) {
       for (const fn of Object.values(model as Record<string, unknown>)) {
         if (vi.isMockFunction(fn)) fn.mockReset();
@@ -171,7 +194,13 @@ describe('auth service', () => {
     mockPrisma.userTenant.findMany.mockResolvedValue([
       {
         role: 'admin',
-        tenant: { id: 'tenant-1', code: 'T1', name: 'Tenant 1', status: 'active' },
+        tenant: {
+          id: 'tenant-1',
+          code: 'T1',
+          name: 'Tenant 1',
+          logoUrl: null,
+          status: 'active',
+        },
       },
     ]);
 
@@ -185,9 +214,94 @@ describe('auth service', () => {
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBe('refresh-token');
     expect(result.tenants).toEqual([
-      expect.objectContaining({ id: 'tenant-1', role: 'admin' }),
+      expect.objectContaining({ id: 'tenant-1', role: 'admin', status: 'active' }),
     ]);
+    expect(mockCacheSet).toHaveBeenCalledWith(
+      'list:user-tenants:user-1',
+      expect.any(Array),
+    );
     expect(mockPrisma.refreshToken.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns profile with tenants from DB on /me cache miss', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      phone: null,
+      name: 'User One',
+      emailVerifiedAt: new Date(),
+      phoneVerifiedAt: null,
+      isPlatformAdmin: false,
+    });
+    mockPrisma.userTenant.findMany.mockResolvedValue([
+      {
+        role: 'viewer',
+        tenant: {
+          id: 'tenant-2',
+          code: 'T2',
+          name: 'Tenant 2',
+          logoUrl: 'http://logo',
+          status: 'active',
+        },
+      },
+    ]);
+
+    const { authService } = await import('../../src/modules/auth/auth.service');
+    const result = await authService.me('user-1');
+
+    expect(result).toMatchObject({
+      id: 'user-1',
+      email: 'user@example.com',
+      tenants: [
+        {
+          id: 'tenant-2',
+          code: 'T2',
+          name: 'Tenant 2',
+          logoUrl: 'http://logo',
+          role: 'viewer',
+          status: 'active',
+        },
+      ],
+    });
+    expect(mockPrisma.userTenant.findMany).toHaveBeenCalledWith({
+      where: { userId: 'user-1', isActive: true },
+      include: { tenant: true },
+    });
+    expect(mockCacheSet).toHaveBeenCalledWith(
+      'list:user-tenants:user-1',
+      expect.any(Array),
+    );
+  });
+
+  it('serves /me tenants from cache on hit without querying memberships', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      email: 'user@example.com',
+      phone: null,
+      name: 'User One',
+      emailVerifiedAt: new Date(),
+      phoneVerifiedAt: null,
+      isPlatformAdmin: false,
+    });
+    mockCacheGet.mockResolvedValue([
+      {
+        id: 'tenant-cached',
+        code: 'C1',
+        name: 'Cached Org',
+        logoUrl: null,
+        role: 'admin',
+        status: 'active',
+      },
+    ]);
+
+    const { authService } = await import('../../src/modules/auth/auth.service');
+    const result = await authService.me('user-1');
+
+    expect(result.tenants).toEqual([
+      expect.objectContaining({ id: 'tenant-cached', name: 'Cached Org' }),
+    ]);
+    expect(mockPrisma.userTenant.findMany).not.toHaveBeenCalled();
+    expect(mockCacheSet).not.toHaveBeenCalled();
   });
 
   it('logs in with Google for existing user by googleId', async () => {
@@ -276,7 +390,7 @@ describe('auth service', () => {
       googleId: null,
       isActive: true,
       tokenVersion: 0,
-      emailVerifiedAt: null,
+      emailVerifiedAt: new Date('2026-01-01'),
       phoneVerifiedAt: null,
       isPlatformAdmin: false,
     });
@@ -288,7 +402,7 @@ describe('auth service', () => {
       googleId: 'google-link',
       isActive: true,
       tokenVersion: 0,
-      emailVerifiedAt: new Date(),
+      emailVerifiedAt: new Date('2026-01-01'),
       phoneVerifiedAt: null,
       isPlatformAdmin: false,
     });
@@ -306,6 +420,57 @@ describe('auth service', () => {
     );
     expect((result.user as Record<string, unknown>).googleId).toBeUndefined();
     expect(result.user.email).toBe('existing@example.com');
+  });
+
+  it('rejects Google login when Google email is not verified', async () => {
+    mockVerifyGoogleIdToken.mockResolvedValue({
+      uid: 'google-unverified',
+      email: 'unverified@example.com',
+      name: 'Unverified',
+      email_verified: false,
+    });
+
+    const { authService } = await import('../../src/modules/auth/auth.service');
+    await expect(
+      authService.loginWithGoogle({ idToken: 'valid-token' }),
+    ).rejects.toMatchObject({
+      code: 'GOOGLE_EMAIL_NOT_VERIFIED',
+      statusCode: 403,
+    });
+    expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects linking Google to an unverified local email account', async () => {
+    mockVerifyGoogleIdToken.mockResolvedValue({
+      uid: 'google-link-unverified-local',
+      email: 'pending@example.com',
+      name: 'Pending User',
+      email_verified: true,
+    });
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.user.findFirst.mockResolvedValue({
+      id: 'user-pending',
+      email: 'pending@example.com',
+      phone: null,
+      name: null,
+      googleId: null,
+      isActive: true,
+      tokenVersion: 0,
+      emailVerifiedAt: null,
+      phoneVerifiedAt: null,
+      isPlatformAdmin: false,
+    });
+
+    const { authService } = await import('../../src/modules/auth/auth.service');
+    await expect(
+      authService.loginWithGoogle({ idToken: 'valid-token' }),
+    ).rejects.toMatchObject({
+      code: 'EMAIL_NOT_VERIFIED',
+      statusCode: 403,
+    });
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
   });
 
   it('registers a device for authenticated user', async () => {

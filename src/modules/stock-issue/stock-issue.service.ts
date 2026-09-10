@@ -276,6 +276,17 @@ export class StockIssueService {
         { status: "out_of_stock", issueId: id },
       );
     }
+    if (existing.status !== "draft") {
+      throw new AppError(
+        "INVALID_STATUS_TRANSITION",
+        409,
+        "Only draft can enter pending_approval",
+      );
+    }
+
+    // Kiểm tra tồn TRƯỚC khi giữ lock trên phiếu (tránh deadlock với commit out_of_stock).
+    // Nếu hết hàng → ghi out_of_stock (connection riêng) rồi ném lỗi → bước duyệt bị rollback.
+    await this.assertStockOrMarkOutOfStock(tenantId, id, actor);
 
     const run = async (trx: Prisma.TransactionClient) => {
       const rows = await trx.$queryRaw<
@@ -324,68 +335,15 @@ export class StockIssueService {
       });
       if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
 
-      let allocations;
-      try {
-        allocations = await allocateIssueLines(
-          trx,
-          tenantId,
-          warehouseId,
-          issue.details,
-          {
-            excludeRef: { docType: "stock_issue", docId: id },
-          },
-        );
-      } catch (err) {
-        if (isStockInsufficientError(err)) {
-          // Commit out_of_stock trên connection riêng khi đang trong workflow txn —
-          // tránh bị rollback cùng bước duyệt (Prisma nested savepoint).
-          const updated = externalTrx
-            ? await commitIssueOutOfStockViaPool({
-                id,
-                tenantId,
-                statusBeforeOutOfStock: "pending_approval",
-                reason: formatOutOfStockReason(err),
-              })
-            : await trx.stockIssue.update({
-                where: { id },
-                data: {
-                  status: "out_of_stock",
-                  statusBeforeOutOfStock: "pending_approval",
-                  outOfStockAt: new Date(),
-                  outOfStockReason: formatOutOfStockReason(err),
-                },
-                include: { details: true },
-              });
-          try {
-            await notifyIssueOutOfStock(
-              tenantId,
-              updated,
-              actor,
-              updated.outOfStockReason,
-            );
-          } catch (notifyErr) {
-            console.error("notifyIssueOutOfStock failed", notifyErr);
-          }
-          await cacheInvalidationService.invalidateStockDocuments(tenantId);
-          if (externalTrx) {
-            throw new AppError(
-              "STOCK_INSUFFICIENT",
-              409,
-              "Sản phẩm đã hết trong kho",
-              {
-                status: "out_of_stock",
-                issueId: id,
-                details:
-                  typeof err === "object" && err !== null && "details" in err
-                    ? (err as { details?: unknown }).details
-                    : undefined,
-              },
-            );
-          }
-          return updated;
-        }
-        throw err;
-      }
+      const allocations = await allocateIssueLines(
+        trx,
+        tenantId,
+        warehouseId,
+        issue.details,
+        {
+          excludeRef: { docType: "stock_issue", docId: id },
+        },
+      );
 
       const expiresAt = new Date(Date.now() + 24 * 3600_000);
       const reservations = mergeReservations(
@@ -404,14 +362,159 @@ export class StockIssueService {
       });
     };
 
-    const result = externalTrx
-      ? await run(externalTrx)
-      : await this.db.$transaction(run);
+    try {
+      const result = externalTrx
+        ? await run(externalTrx)
+        : await this.db.$transaction(run);
 
-    if (!externalTrx) {
-      await cacheInvalidationService.invalidateStockDocuments(tenantId);
+      if (!externalTrx) {
+        await cacheInvalidationService.invalidateStockDocuments(tenantId);
+      }
+      return withVnTimestamps(result);
+    } catch (err) {
+      if (isStockInsufficientError(err)) {
+        // Race: hết hàng giữa precheck và reserve
+        await this.persistOutOfStockAndNotify(
+          tenantId,
+          id,
+          actor,
+          "pending_approval",
+          err,
+        );
+        throw new AppError(
+          "STOCK_INSUFFICIENT",
+          409,
+          "Sản phẩm đã hết trong kho",
+          {
+            status: "out_of_stock",
+            issueId: id,
+            details:
+              typeof err === "object" && err !== null && "details" in err
+                ? (err as { details?: unknown }).details
+                : undefined,
+          },
+        );
+      }
+      throw err;
     }
-    return withVnTimestamps(result);
+  }
+
+  /**
+   * Chặn duyệt nếu hết hàng: dry-run allocate → nếu thiếu thì set out_of_stock và throw.
+   * Dùng trước mọi bước approve workflow của phiếu xuất.
+   */
+  async assertCanApproveOrMarkOutOfStock(
+    tenantId: string,
+    id: string,
+    actor: StockDocActor,
+  ) {
+    const issue = await this.db.stockIssue.findFirst({
+      where: { id, tenantId },
+      include: { details: true },
+    });
+    if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
+    if (issue.status === "out_of_stock") {
+      throw new AppError(
+        "STOCK_INSUFFICIENT",
+        409,
+        "Sản phẩm đã hết trong kho",
+        { status: "out_of_stock", issueId: id },
+      );
+    }
+    // Chỉ bắt buộc check tồn khi còn draft (sắp reserve) hoặc đang giữ chỗ / đã duyệt chờ xuất
+    if (
+      issue.status !== "draft" &&
+      issue.status !== "pending_approval" &&
+      issue.status !== "approved"
+    ) {
+      return;
+    }
+    await this.assertStockOrMarkOutOfStock(tenantId, id, actor);
+  }
+
+  /** Dry-run tồn; hết hàng → commit out_of_stock rồi ném STOCK_INSUFFICIENT */
+  private async assertStockOrMarkOutOfStock(
+    tenantId: string,
+    id: string,
+    actor: StockDocActor,
+  ) {
+    const issue = await this.db.stockIssue.findFirst({
+      where: { id, tenantId },
+      include: { details: true },
+    });
+    if (!issue) throw new AppError("NOT_FOUND", 404, "Issue not found");
+    if (issue.status === "out_of_stock") {
+      throw new AppError(
+        "STOCK_INSUFFICIENT",
+        409,
+        "Sản phẩm đã hết trong kho",
+        { status: "out_of_stock", issueId: id },
+      );
+    }
+
+    try {
+      await this.db.$transaction(async (trx) => {
+        await allocateIssueLines(
+          trx,
+          tenantId,
+          issue.warehouseId,
+          issue.details,
+          {
+            excludeRef: { docType: "stock_issue", docId: id },
+            dryRun: true,
+          },
+        );
+      });
+    } catch (err) {
+      if (!isStockInsufficientError(err)) throw err;
+      await this.persistOutOfStockAndNotify(
+        tenantId,
+        id,
+        actor,
+        issue.status === "approved" ? "approved" : "pending_approval",
+        err,
+      );
+      throw new AppError(
+        "STOCK_INSUFFICIENT",
+        409,
+        "Sản phẩm đã hết trong kho",
+        {
+          status: "out_of_stock",
+          issueId: id,
+          details:
+            typeof err === "object" && err !== null && "details" in err
+              ? (err as { details?: unknown }).details
+              : undefined,
+        },
+      );
+    }
+  }
+
+  private async persistOutOfStockAndNotify(
+    tenantId: string,
+    id: string,
+    actor: StockDocActor,
+    statusBeforeOutOfStock: "pending_approval" | "approved",
+    err: unknown,
+  ) {
+    const updated = await commitIssueOutOfStockViaPool({
+      id,
+      tenantId,
+      statusBeforeOutOfStock,
+      reason: formatOutOfStockReason(err),
+    });
+    try {
+      await notifyIssueOutOfStock(
+        tenantId,
+        updated,
+        actor,
+        updated.outOfStockReason,
+      );
+    } catch (notifyErr) {
+      console.error("notifyIssueOutOfStock failed", notifyErr);
+    }
+    await cacheInvalidationService.invalidateStockDocuments(tenantId);
+    return updated;
   }
 
   /**
@@ -444,28 +547,13 @@ export class StockIssueService {
       return issue;
     } catch (err) {
       if (!isStockInsufficientError(err)) throw err;
-      const updated = await this.db.stockIssue.update({
-        where: { id },
-        data: {
-          status: "out_of_stock",
-          statusBeforeOutOfStock: "pending_approval",
-          outOfStockAt: new Date(),
-          outOfStockReason: formatOutOfStockReason(err),
-        },
-        include: { details: true },
-      });
-      try {
-        await notifyIssueOutOfStock(
-          tenantId,
-          updated,
-          actor,
-          updated.outOfStockReason,
-        );
-      } catch (notifyErr) {
-        console.error("notifyIssueOutOfStock failed", notifyErr);
-      }
-      await cacheInvalidationService.invalidateStockDocuments(tenantId);
-      return updated;
+      return this.persistOutOfStockAndNotify(
+        tenantId,
+        id,
+        actor,
+        "pending_approval",
+        err,
+      );
     }
   }
 

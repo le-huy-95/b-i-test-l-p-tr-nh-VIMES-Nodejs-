@@ -29,7 +29,7 @@
 **Files:**
 - Create: `tests/modules/stock-issue.get-batch.test.ts`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```ts
 import { beforeEach, describe, expect, it, vi } from "vitest";
